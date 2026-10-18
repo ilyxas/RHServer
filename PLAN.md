@@ -66,7 +66,9 @@ contracts/
   vectors/jcs.json                # этап 0
   vectors/ecdsa.json              # этап 1
   vectors/signed_requests.json    # этап 1
+  vectors/request_build.json      # этап 1: тестовый ключ + поля → X-RH-Auth байт-в-байт
   vectors/server_sig.json         # этап 1
+  vectors/ws_frames.json          # этап 3: подписанные кадры WebSocket
   vectors/pairing.json            # этап 1: строка pairing → разобранные поля
   vectors/pages/{valid,invalid}/  # этап 5: страницы и ожидаемые тексты ошибок
 ```
@@ -76,27 +78,30 @@ contracts/
 **Формат векторов** — JSON, одинаковый для обеих сторон:
 
 - `jcs.json`: `[{ "name", "input": "<сырой JSON-текст строкой>", "expected": "<канонический текст>", "expected_sha256", "scope": "protocol" | "full" }]`. Вход строкой, чтобы парсеры языков не влияли. `protocol` обязателен обеим сторонам (строки с юникодом и экранированием, целые, вложенность, сортировка ключей по UTF-16, включая не-ASCII); `full` — числа по ES6, включая примеры RFC 8785 (обязателен серверу).
-- `ecdsa.json`: `{ "name", "pub_x963_b64", "message_b64", "sig_der_b64", "valid" }` — включая high-S, битый DER, чужой ключ и одну подпись настоящего Secure Enclave (от iOS, этап 1).
+- `ecdsa.json`: `{ "name", "pub_x963_b64", "message_b64", "sig_der_b64", "valid" }` — включая битый DER, чужой ключ и одну подпись настоящего Secure Enclave (от iOS, этап 1). High-S сервер принимает (так ведёт себя `cryptography`; Security.framework может выдавать обе формы) — вектор с high-S помечен `valid: true`.
+- `request_build.json`: `{ "name", "priv_scalar_b64", "device", "key", "nonce", "ts", "exp", "op", "body_b64", "expected_auth_b64", "expected_auth_text" }` — клиент собирает `X-RH-Auth` и сверяет байт-в-байт; подпись недетерминирована, её клиент проверяет через verify.
 - `signed_requests.json`: `{ "name", "registry", "now", "used_nonces", "issued_nonces", "request": { method, path, headers, body_b64 }, "expect": "accept" | { "reject": "<code>" } }`.
-- `server_sig.json`: `{ "core_pub_x963_b64", "request_nonce", "body_b64", "sig_der_b64", "valid" }`.
+- `server_sig.json`: `{ "name", "core_pub_x963_b64", "request_nonce", "status", "body_b64", "sig_der_b64", "valid" }` — включая подмену статуса и тела.
 
 ### Протокол: конкретизация SPEC §4 (входит в `contracts/` этапа 1, согласуется с iOS)
 
 Это уточнения формата, а не изменение решений §4; если агент iOS или Илья видят в них отход от SPEC — обсуждаем до кода.
 
 - Публичные ключи: X9.63 uncompressed (65 байт, так отдаёт `SecKeyCopyExternalRepresentation`), base64 стандартный с паддингом. Ключ ядра — тоже P-256.
-- `device_id` = первые 32 hex-символа `sha256(normal_pub_x963)`; вычисляет клиент, ядро сверяет при pairing.
+- `device_id` = первые 32 hex-символа `sha256(normal_pub_x963)`; вычисляет клиент, ядро сверяет при pairing. Выбран вместо UUID: id привязан к ключу, его нельзя занять чужим ключом, и не нужно отдельно хранить его на телефоне.
 - `ts`, `exp`: `YYYY-MM-DDTHH:MM:SSZ`, UTC, без долей секунды. `exp − ts ≤ 60 с`.
 - `body`: sha256 (hex, lowercase) сырых байт тела; для пустого тела — sha256 пустой строки.
 - Подписываются байты JCS-объекта из §4.3; `X-RH-Auth` = base64 этих байт. Ядро разбирает `X-RH-Auth`, перекодирует в JCS и требует побайтного совпадения (защита от неканонического ввода).
 - `op` закреплён за эндпоинтом (`x-rh-op`), уровень ключа — за `op` (`x-rh-key`). Чужой `op` — отказ `op_mismatch`.
 - `POST /v1/challenge` `{ "device": "<id>" }` — без подписи (подписать ещё нечем), отказ для неизвестного и отозванного устройства (§4.5). Ответ: `{ "nonce", "expires", "server_time" }`.
 - `POST /v1/pair`: в роли nonce — одноразовый код из QR; подписи `X-RH-Sig` (normal) и `X-RH-Sig-Critical` (critical) над одним объектом; тело — имя устройства и три публичных ключа (`normal`, `critical`, `ssh`).
-- Строка pairing (QR и буфер обмена в симуляторе): `rhpair:` + base64url(JCS `{"v":1,"addr":"https://<имя MagicDNS>:<порт>","core_key":"<b64>","code":"<b64>","exp":"<ts>"}`).
+- Строка pairing (QR и буфер обмена в симуляторе): `rhpair:` + base64url без паддинга (JCS `{"v":1,"url":"https://<имя MagicDNS>:<порт>","core_key":"<b64>","code":"<b64>","exp":"<ts>"}`). В симуляторе — из буфера обмена или аргумента запуска `-RHPairing <строка>`.
 - Отпечаток устройства (терминал и экран pairing на телефоне): первые 16 hex `sha256(JCS {"normal","critical","ssh"})` группами по 4.
 - Отказы: HTTP 401/403 и `{"error":{"code","message"}}`, коды: `malformed_auth`, `unknown_device`, `revoked_device`, `wrong_key_level`, `op_mismatch`, `nonce_unknown`, `nonce_used`, `nonce_expired`, `expired`, `clock_skew`, `body_mismatch`, `bad_signature`, `bad_pair_code`, `peer_mismatch` (whois, §3.3). Код нужен клиенту, чтобы отличать **Auth error** от **Pairing lost** (§4.2).
-- `X-RH-Server-Sig`: подпись ключом ядра над JCS `{"v":1,"nonce":"<nonce запроса>","body":"<sha256 hex тела ответа>"}`.
-- WebSocket: upgrade-запрос несёт те же `X-RH-Auth`/`X-RH-Sig` с `op: "ws.open"`; сокет привязан к устройству; при отзыве устройства ядро закрывает его сокеты.
+- В подписываемых объектах только строки и целые; дробные числа запрещены (ядро отвечает `malformed_auth`).
+- `X-RH-Server-Sig`: DER-подпись ключом ядра (base64) над JCS `{"v":1,"nonce":"<nonce запроса>","status":<HTTP-код>,"body":"<sha256 hex тела ответа>"}`; статус внутри, чтобы 4xx нельзя было выдать за 2xx. Подписываются и ответы-отказы.
+- WebSocket: upgrade-запрос несёт те же `X-RH-Auth`/`X-RH-Sig` с `op: "ws.open"`; сокет привязан к устройству; при отзыве устройства ядро закрывает его сокеты. Кадр сервера: `{"seq":<n>,"type":"…","data":{…},"sig":"<b64>"}`, `seq` растёт с 1 в пределах соединения (дедупликация и контроль пропусков), `sig` — ключом ядра над JCS `{"v":1,"nonce":"<nonce ws.open>","seq":<n>,"body":"<sha256 hex JCS {seq,type,data}>"}`. После переподключения клиент берёт состояние через REST, история по сокету не досылается. Схема событий — `contracts/api/events.schema.json`.
+- Чтения могут идти `GET` (тело пустое, `body` = sha256 пустой строки); подпись и challenge — как для всех запросов.
 
 ### Внутренний канал rh-agent ↔ rh-core
 
@@ -107,7 +112,7 @@ contracts/
 - Я работаю в Linux-контейнере. Здесь идут `pytest`, контрактные тесты и всё, что не зависит от macOS. Части, завязанные на macOS (launchd, Tailscale, `psutil` на Mac, `~/Friend`, процессы агентов), — за интерфейсами с fake-реализациями, плюс отдельные тесты с маркером `mac`.
 - **[утвердить]** CI: GitHub Actions — `ubuntu-latest` на каждый PR (бесплатно в пределах лимитов) и `macos-latest` для тестов `mac` и интеграции с симулятором (минуты macOS дороже). Альтернатива без CI для macOS — гонять `mac`-тесты и интеграцию на Mac Ильи (вручную или через Remote Control на его Mac).
 - Интеграция в симуляторе (§9.1, PROCESS «Цикл этапа» п. 3) требует macOS: XCUITest приложения против `rhcore dev` + `rh-agent --fake`. Сервер поставляет одну команду запуска стенда: `rhcore dev up --fixture tests/fixtures/<этап>` (порт, временные каталоги, сид-данные, печать строки pairing). Где её гонять — тот же вопрос **[утвердить]** про CI.
-- Dev-режим ядра (§9.1) включается только ключом в конфиге (`mode: dev`): временные каталоги, 127.0.0.1, приём программных ключей. В рабочей конфигурации и под `_rhcore` ядро отказывается стартовать с `mode: dev` (тест на это).
+- Dev-режим ядра (§9.1) включается только ключом в конфиге (`mode: dev`): временные каталоги, `http://127.0.0.1:8787` без TLS (клиент разрешает это только в Debug через `NSAllowsLocalNetworking`), приём программных ключей; подписи запросов и ответов работают так же, как в рабочем режиме. В рабочей конфигурации и под `_rhcore` ядро отказывается стартовать с `mode: dev` (тест на это).
 
 ---
 
@@ -140,7 +145,7 @@ contracts/
 
 **Задачи**
 1. Крипто (`rh_common/crypto.py`): загрузка X9.63, проверка DER-подписи, ключ ядра (генерация при первом старте, хранение в каталоге данных с правами 600), подпись ответов.
-2. `contracts/` этапа 1 (отдельный PR первым): эндпоинты `challenge`, `pair`, `ping`, `status`, `devices.list`, `devices.revoke`, `ws.open`; события `device.revoked`; векторы `ecdsa`, `signed_requests`, `server_sig`, `pairing`.
+2. `contracts/` этапа 1 (отдельный PR первым): эндпоинты `challenge`, `pair`, `ping`, `status`, `devices.list`, `devices.revoke`, `ws.open`; события `device.revoked`; векторы `ecdsa`, `request_build`, `signed_requests`, `server_sig`, `pairing`.
 3. Хранилище SQLite (`rh_core/store.py`) с миграциями: устройства (id, имя, ключи по уровням, дата pairing, статус), nonce (выданные/использованные, TTL).
 4. Проверка запроса — одна функция-middleware с полным перечнем отказов §4.3 и кодами выше; каждый отказ и каждый принятый запрос — в журнал.
 5. Журнал ядра (`rh_core/journal.py`): JSON Lines, файл на день, поле `prev` (sha256 предыдущей записи, цепочка через границу файлов), fsync; `rhcore journal verify` проверяет цепочку.
@@ -173,7 +178,7 @@ contracts/
 - Включённый HTTPS в Tailscale (MagicDNS + HTTPS certificates в админке) — пошаговая инструкция будет в PR.
 - Tailscale ACL: доступ к порту ядра только с iPhone — пошаговая инструкция в PR (можно отложить до этапа 7, ядро всё равно проверяет подписи и whois).
 - Физический pairing на iPhone (приёмка этапа).
-- **[утвердить]** порт ядра (предложение: 8443).
+- **[утвердить]** порт ядра (предложение: 8443 в рабочем режиме, 8787 в dev).
 
 **Приёмка:** все тесты отказов зелёные и видны в журнале; Илья проходит pairing на своём iPhone и видит подписанный ping.
 
@@ -202,7 +207,7 @@ contracts/
 ## Этап 3. Chat
 
 **Задачи**
-1. `contracts/` этапа 3: `chat.send` (подписанный, текст + ссылки на вложения), `chat.stop`, `chat.reset`, `chat.history`, `attach.upload` (лимит из настроек, по умолчанию 25 МБ), события WS: `chat.delta`, `chat.message`, `chat.done`, `agent.state` (работает / ждёт / idle), `usage` (токены и размер окна).
+1. `contracts/` этапа 3: `chat.send` (подписанный, текст + ссылки на вложения), `chat.stop`, `chat.reset`, `chat.history`, `attach.upload` (лимит из настроек, по умолчанию 25 МБ), события WS: `chat.delta`, `chat.message`, `chat.done`, `agent.state` (работает / ждёт / idle), `usage` (токены и размер окна); вектор `ws_frames.json` (подписанные кадры, подмена `seq` и данных).
 2. rh-agent на Claude Agent SDK: одна активная сессия, продолжение, Reset → новая сессия (старая в истории), Stop прерывает текущий ход, usage и окно после каждого ответа, изображения как изображения, файлы — путями из `inbox/<session>/`.
 3. Внутренний канал rh-agent ↔ rh-core (unix-socket, проверка uid).
 4. Запись переписки в `~/Hst/CGC<date>.txt` в формате существующих записей, автор и время, идентификатор агента **RemoteHands**.
