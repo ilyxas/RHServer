@@ -58,6 +58,7 @@ RHServer/
 contracts/
   README.md                       # что где, как обновлять, правила версий
   CHANGELOG.md                    # каждое изменение с этапом
+  MANIFEST.sha256                 # хеши файлов и корневой хеш для проверки копии у клиента
   api/openapi.yaml                # HTTP API (OpenAPI 3.1), x-rh-op / x-rh-key на каждой операции
   api/events.schema.json          # события WebSocket, discriminator "type"
   pages/rh.page.v1.schema.json    # SPEC §7.4 (этап 5)
@@ -73,7 +74,15 @@ contracts/
   vectors/pages/{valid,invalid}/  # этап 5: страницы и ожидаемые тексты ошибок
 ```
 
-**Как клиент получает контракты** (предложение, окончательно — по итогам ревью с агентом iOS): вендоренная копия `RHClient/contracts/` + файл `RHClient/contracts/UPSTREAM` с SHA коммита RHServer; скрипт синхронизации на стороне клиента. Сабмодуль не предлагаю: усложняет сборку в Xcode и CI с приватными репозиториями. Проверка в тестах сервера: каждое изменение `contracts/` сопровождается записью в `CHANGELOG.md`.
+**Как клиент получает контракты** — копия с проверкой хеша (вариант Ильи «копия + хеш в тестах»; согласовано с агентом iOS):
+
+- В RHServer лежит `contracts/MANIFEST.sha256`: sha256 каждого файла `contracts/` и корневой хеш (sha256 отсортированного списка «путь  хеш»). Генерирует `scripts/contracts_manifest.py`; тест сервера падает, если манифест не совпадает с файлами — значит, контракт нельзя изменить, не обновив манифест.
+- В RHClient — копия `contracts/` целиком (с манифестом) и `contracts/UPSTREAM`: SHA коммита RHServer и корневой хеш. Обновление только скриптом `scripts/sync-contracts.sh <sha>`, отдельным коммитом «sync contracts @<sha>».
+- Тест клиента пересчитывает хеши файлов копии и сверяет с манифестом и с корневым хешем в `UPSTREAM`; любое расхождение — красный тест. Так копия не может молча разъехаться с оригиналом.
+- В CI клиента (где есть сеть) дополнительно: манифест на коммите `UPSTREAM` в RHServer совпадает с копией.
+- Сабмодуль — запасной вариант, если Илья предпочтёт: он сложнее для Xcode и клонов (`--recursive`, доступ к приватному репо из CI).
+- Изменения контракта — только PR в RHServer с ревью агента iOS; клиент подтягивает новую версию осознанно, синком на конкретный SHA. Каждое изменение — запись в `contracts/CHANGELOG.md`.
+- Главная часть контракта — тест-векторы: тесты обеих сторон гоняются по одним и тем же файлам, расхождение сериализации ловится в первый день, а не на pairing.
 
 **Формат векторов** — JSON, одинаковый для обеих сторон:
 
@@ -121,7 +130,7 @@ contracts/
 **Задачи**
 1. `pyproject.toml` (Python ≥ 3.12, uv), пакеты `rh_common`, `rh_core`, `rh_agent`, `rh_cli`; entry points `rhcore`, `rhpage`, `rh-agent` (пока заглушки с `--version`).
 2. `CLAUDE.md` для агентов-разработчиков RHServer: правила SPEC §10 и PROCESS (без sudo, без деплоя, [проверить] → `docs/decisions/`, `contracts/` только через ревью iOS, формат PR).
-3. `contracts/`: `README.md`, `CHANGELOG.md`, скелет `api/openapi.yaml` (info, servers, общие схемы `Error`, описание схемы подписи, `x-rh-op`/`x-rh-key`), `vectors/jcs.json`.
+3. `contracts/`: `README.md`, `CHANGELOG.md`, `MANIFEST.sha256` + `scripts/contracts_manifest.py`, скелет `api/openapi.yaml` (info, servers, общие схемы `Error`, описание схемы подписи, `x-rh-op`/`x-rh-key`), `vectors/jcs.json`.
 4. `rh_common/jcs.py` — RFC 8785; генератор векторов `scripts/gen_vectors.py` (векторы воспроизводимы, генератор — в репо).
 5. `ruff`, `mypy`, `pytest`; `make test` / `uv run pytest`; CI ubuntu (если утверждено).
 6. `.gitignore` для Python; `.DS_Store` убрать из репо и игнорировать.
@@ -129,9 +138,10 @@ contracts/
 **Тесты**
 - JCS проходит все векторы `jcs.json` (`protocol` и `full`), результат совпадает с пакетом `rfc8785` на тех же входах и на случайных (property-based, `hypothesis`).
 - `openapi.yaml` валиден (`openapi-spec-validator`); каждый `operation` имеет `x-rh-op` и `x-rh-key`.
+- `MANIFEST.sha256` совпадает с файлами `contracts/`.
 - Smoke: entry points запускаются.
 
-**От iOS:** ревью `contracts/` (README, формат векторов, `jcs.json`); подтверждение, что клиентские тесты проходят `scope: protocol`; согласованный способ доставки контрактов в RHClient.
+**От iOS:** ревью `contracts/` (README, формат векторов, `jcs.json`); подтверждение, что клиентские тесты проходят `scope: protocol`; копия `contracts/` в RHClient с тестом сверки хешей (красный при расхождении).
 
 **[проверить]:** нет.
 
