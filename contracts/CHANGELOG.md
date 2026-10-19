@@ -1,5 +1,10 @@
 # contracts/ changelog
 
+## Stage 1, real Secure Enclave signature
+
+- `vectors/ecdsa.json`: two new cases, `secure-enclave-device` (valid) and `secure-enclave-message-changed` (invalid), with a signature exported from a real iPhone Secure Enclave key at stage 1 acceptance. Fixed data in `scripts/vectors_trust.py`; the generator checks the message is the canonical signed object for that key's device id. Existing cases are unchanged.
+- `api/openapi.yaml`: the dev server description says the port may differ from 8787 and comes from the pairing string. No format changes.
+
 ## Stage 1, placeholders
 
 - Vectors and docs carry no real names, user names or host names: fixture names are neutral (`Мой iPhone`, `Mac`, `/Users/owner/...`, `mac.tail1234.ts.net`). Only values changed, not formats. `signed_requests.json`, `server_sig.json`, `pairing.json` and `jcs.json` are regenerated, so their bytes and signatures differ.
