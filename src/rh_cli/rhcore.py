@@ -38,7 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     dev_sub = dev.add_subparsers(dest="dev_command", metavar="COMMAND", required=True)
     up = dev_sub.add_parser("up", help="run a dev core on 127.0.0.1 over plain HTTP")
     up.add_argument("--data", type=Path, help="data directory (default: a new /tmp/rh-dev-*)")
-    up.add_argument("--port", type=int, default=DEV_PORT)
+    up.add_argument(
+        "--port",
+        type=int,
+        help=f"port on 127.0.0.1 (default: {DEV_PORT}, or a free one if {DEV_PORT} is taken)",
+    )
     up.add_argument(
         "--auto-pair", action="store_true", help="accept every verified pairing request"
     )
@@ -96,11 +100,19 @@ def _serve(args: argparse.Namespace) -> int:
 
 
 def _dev_up(args: argparse.Namespace) -> int:
-    from rh_core.server import Job, auto_pair, run
+    from rh_core.server import Job, auto_pair, dev_socket, run
 
+    try:
+        sock = dev_socket(args.port)
+    except OSError as e:
+        print(f"rhcore: порт {args.port} занят ({e.strerror})", file=sys.stderr)
+        return 2
+    port = sock.getsockname()[1]
+    if args.port is None and port != DEV_PORT:
+        print(f"порт {DEV_PORT} занят, ядро слушает {port}")
     data = args.data or Path(tempfile.mkdtemp(prefix="rh-dev-", dir="/tmp"))
     data = data.expanduser().resolve()
-    cfg = dev_config(data, port=args.port)
+    cfg = dev_config(data, port=port)
     cfg.validate()
     data.mkdir(parents=True, exist_ok=True)
     config_path = data / "core.toml"
@@ -115,7 +127,7 @@ def _dev_up(args: argparse.Namespace) -> int:
         print("rhcore: --pairing-file works only with --auto-pair", file=sys.stderr)
         return 2
     sys.stdout.flush()
-    run(cfg, background=jobs)
+    run(cfg, background=jobs, sock=sock)
     return 0
 
 
