@@ -44,6 +44,7 @@ from rh_common.protocol import (
     verify_request,
 )
 from rh_core import admin, keys, logfeed
+from rh_core.agent_rules import ProcessRules
 from rh_core.agents import Team
 from rh_core.config import Config
 from rh_core.data import DataSources, parse_ids
@@ -106,7 +107,11 @@ class Core:
         self.connections: dict[str, set[Connection]] = {}
         self.data = DataSources(
             probe=probe or PsutilProbe(),
-            team=Team(config.team_file, skip=config.team_skip),
+            team=Team(
+                config.team_file,
+                skip=config.team_skip,
+                rules=ProcessRules(config.agent_rules) if config.agent_rules else None,
+            ),
             journal_dir=config.journal_dir,
             names=self.device_name,
             core_version=__version__,

@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from rh_core.agent_rules import WHEN_RUNNING, Rule
+
 Mode = Literal["dev", "production"]
 
 DEV_HOST = "127.0.0.1"
@@ -42,6 +44,7 @@ class Config:
     tailscale: str | None = None  # path to the tailscale CLI; found automatically if unset
     team_file: Path | None = TEAM_FILE  # agents.status; None: no team
     team_skip: tuple[str, ...] = ()  # team ids that are not agents (the owner)
+    agent_rules: tuple[Rule, ...] = ()  # agents.status rules; agents without one: unknown
 
     @property
     def db_path(self) -> Path:
@@ -142,10 +145,11 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
 
 
 def _agents(table: Any, base: Path) -> dict[str, Any]:
-    """[agents]: team_file (path or "" for no team), skip (ids that are not agents)."""
+    """[agents]: team_file (path or "" for no team), skip (ids that are not agents),
+    [[agents.rule]] (status rules, see rh_core.agent_rules)."""
     if not isinstance(table, dict):
         raise ConfigError("[agents] must be a table")
-    unknown = set(table) - {"team_file", "skip"}
+    unknown = set(table) - {"team_file", "skip", "rule"}
     if unknown:
         raise ConfigError(f"unknown [agents] keys: {sorted(unknown)}")
     out: dict[str, Any] = {}
@@ -157,7 +161,63 @@ def _agents(table: Any, base: Path) -> dict[str, Any]:
     if not isinstance(skip, list) or not all(isinstance(s, str) for s in skip):
         raise ConfigError("[agents] skip must be a list of strings")
     out["team_skip"] = tuple(skip)
+    rules = table.get("rule", [])
+    if not isinstance(rules, list):
+        raise ConfigError("[[agents.rule]] must be an array of tables")
+    out["agent_rules"] = tuple(_rule(r, base) for r in rules)
+    ids = [r.id for r in out["agent_rules"]]
+    if len(set(ids)) != len(ids):
+        raise ConfigError("[[agents.rule]]: one rule per agent id")
     return out
+
+
+_RULE_KEYS = {
+    "id",
+    "process",
+    "cwd",
+    "transcripts",
+    "working_within_s",
+    "when_running",
+    "stale_after_s",
+}
+
+
+def _rule(doc: Any, base: Path) -> Rule:
+    if not isinstance(doc, dict):
+        raise ConfigError("[[agents.rule]] entries must be tables")
+    where = f"[[agents.rule]] {doc.get('id', '?')}"
+    unknown = set(doc) - _RULE_KEYS
+    if unknown:
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
+    for key in ("id", "process"):
+        if not isinstance(doc.get(key), str) or not doc[key]:
+            raise ConfigError(f"{where}: {key} is required")
+    for key in ("cwd", "transcripts", "when_running"):
+        if key in doc and not isinstance(doc[key], str):
+            raise ConfigError(f"{where}: {key} must be a string")
+    for key in ("working_within_s", "stale_after_s"):
+        value = doc.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ConfigError(f"{where}: {key} must be a positive integer (seconds)")
+    when = doc.get("when_running")
+    if when is not None and when not in WHEN_RUNNING:
+        raise ConfigError(f"{where}: when_running must be one of {list(WHEN_RUNNING)}")
+    cwd = None
+    if "cwd" in doc:
+        cwd = Path(doc["cwd"]).expanduser()
+        if not cwd.is_absolute():
+            raise ConfigError(f"{where}: cwd must be absolute or start with ~")
+    return Rule(
+        id=doc["id"],
+        process=doc["process"],
+        cwd=cwd,
+        transcripts=doc.get("transcripts"),
+        working_within_s=doc.get("working_within_s", Rule.working_within_s),
+        when_running=when,
+        stale_after_s=doc.get("stale_after_s"),
+    )
 
 
 def dev_config(data_dir: Path, *, port: int = DEV_PORT, team_file: Path | None = None) -> Config:
