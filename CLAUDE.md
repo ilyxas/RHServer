@@ -1,0 +1,33 @@
+# RHServer — правила для агентов-разработчиков
+
+Что строим — `SPEC.md` (в `~/Development/RemoteHands/`), как работаем — `PROCESS.md`, план этой стороны — `PLAN.md`.
+Здесь: rh-core, rh-agent, CLI `rhcore` / `rhpage`, скрипты установки. Клиент — репозиторий `ilyxas/RHClient`.
+
+## Запуск
+
+```sh
+uv sync                    # Python 3.12 из .python-version, зависимости из uv.lock
+./scripts/check.sh         # ruff, mypy, MANIFEST, pytest — всё, что должен пройти PR
+uv run pytest -m mac       # только тесты, которым нужна настоящая macOS
+```
+
+`check.sh` гоняется и в облаке (Linux), и на Mac Ильи; вывод с Mac прикладывается к описанию PR. GitHub Actions не используется (решение Ильи).
+
+## Структура
+
+- `src/rh_common/` — общее: JCS (RFC 8785), крипто, форматы.
+- `src/rh_core/`, `src/rh_agent/`, `src/rh_cli/` — ядро, агент, CLI.
+- `contracts/` — общий шов с RHClient, см. `contracts/README.md`.
+- `scripts/gen_vectors.py` — генератор тест-векторов, `scripts/contracts_manifest.py` — манифест.
+- `docs/decisions/` — закрытые **[проверить]**.
+
+## Правила
+
+- Решения SPEC §1–4 и §7.1 не менять без Ильи. Нашлось противоречие или путь проще — описать и спросить.
+- **[проверить]** закрывать до реализации соответствующей части: проверить по актуальной документации, записать `docs/decisions/NNN-<тема>.md` (вопрос, вывод, источник, дата). Расходится с SPEC — стоп по этому направлению, вопрос Илье.
+- **[утвердить]** — решение Ильи; до него эта часть не реализуется.
+- Никакого sudo, ядро не деплоить. Инструкции Илье — только полные и пошаговые.
+- Не добавлять ограничений и подтверждений сверх SPEC.
+- `contracts/`: любое изменение — PR в RHServer с ревью агента iOS; в том же PR обновить `MANIFEST.sha256` (`uv run python scripts/contracts_manifest.py`) и `contracts/CHANGELOG.md`. Векторы не править руками: менять случаи в `scripts/gen_vectors.py` и перегенерировать.
+- macOS-зависимое (launchd, Tailscale, psutil на Mac, `~/Friend`, процессы) — за интерфейсами с fake-реализациями; тесты на настоящей системе помечать `@pytest.mark.mac`.
+- Один PR — одна сторона одного этапа (или его логичная часть), тесты зелёные. Описание: Before / After / How, что не менялось, что не проверено.

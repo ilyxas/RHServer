@@ -1,0 +1,87 @@
+openapi: 3.1.0
+info:
+  title: RemoteHands core API
+  version: 0.0.1
+  description: |
+    HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
+    signing scheme below applies to every operation unless it says otherwise.
+
+    Every operation carries two extensions:
+      x-rh-op   the `op` value that must appear in the signed object;
+      x-rh-key  the key level the core requires (normal | critical | none).
+
+    Signed request (SPEC §4.3):
+      1. POST /v1/challenge -> nonce (32 bytes, single use, TTL 60 s).
+      2. Signed object, canonical JSON per RFC 8785 (contracts/vectors/jcs.json):
+         {"v":1,"device":"<id>","key":"normal|critical","nonce":"<base64>",
+          "ts":"YYYY-MM-DDTHH:MM:SSZ","exp":"<ts + ≤60 s>","op":"<x-rh-op>",
+          "body":"<sha256 hex of raw body bytes; sha256 of empty body for GET>"}
+         Only strings and integers are allowed in it.
+      3. X-RH-Auth = base64 (RFC 4648 §4, padded) of the canonical bytes;
+         X-RH-Sig = base64 of the ECDSA P-256 / SHA-256 DER signature over them.
+    Device public keys: X9.63 uncompressed (65 bytes), base64.
+    Every core response carries X-RH-Server-Sig: DER signature by the core key over
+    JCS {"v":1,"nonce":"<request nonce>","status":<HTTP status>,"body":"<sha256 hex>"}.
+    No bearer tokens or cookies.
+
+    Details of challenge, pairing and WebSocket frames land with stage 1 and 3.
+servers:
+  - url: https://{host}:8443
+    description: Production core, Tailscale interface only
+    variables:
+      host:
+        default: mac.tailnet.ts.net
+        description: MagicDNS name of Илья's Mac
+  - url: http://127.0.0.1:8787
+    description: Dev mode (config only, never in a production install)
+paths: {}
+components:
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              $ref: "#/components/schemas/ErrorCode"
+            message:
+              type: string
+              description: Human readable reason, also written to the core journal.
+    ErrorCode:
+      type: string
+      description: Machine readable rejection reason (SPEC §4.3).
+      enum:
+        - malformed_auth
+        - unknown_device
+        - revoked_device
+        - wrong_key_level
+        - op_mismatch
+        - nonce_unknown
+        - nonce_used
+        - nonce_expired
+        - expired
+        - clock_skew
+        - body_mismatch
+        - bad_signature
+        - bad_pair_code
+        - pair_rejected
+        - peer_mismatch
+  securitySchemes:
+    rhAuth:
+      type: apiKey
+      in: header
+      name: X-RH-Auth
+      description: Base64 of the canonical signed object; see info.description.
+    rhSig:
+      type: apiKey
+      in: header
+      name: X-RH-Sig
+      description: Base64 DER signature over the bytes carried in X-RH-Auth.
+security:
+  - rhAuth: []
+    rhSig: []
