@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RemoteHands core API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
     signing scheme below applies to every operation unless it says otherwise.
@@ -35,7 +35,7 @@ info:
     A nonce is consumed once the signature is valid and the nonce is a known,
     unused one for this device, even when a later check fails.
 
-    HTTP status by code: 400 malformed_auth; 401 op_mismatch, wrong_key_level,
+    HTTP status by code: 400 malformed_auth, bad_request; 401 op_mismatch, wrong_key_level,
     bad_signature, nonce_*, expired, clock_skew, body_mismatch; 403
     unknown_device, revoked_device, peer_mismatch, bad_pair_code, pair_rejected.
     The client shows "Pairing lost" for unknown_device, revoked_device and for a
@@ -52,6 +52,11 @@ info:
 
     WebSocket frames (GET /v1/ws): {"seq":n,"payload":"<JSON text>","sig":"<b64>"};
     see contracts/api/events.schema.json and contracts/vectors/ws_frames.json.
+
+    Reads that take parameters (data.get, log.list) are POST with a JSON body, so
+    the parameters are covered by the signature through `body`. A signed request
+    whose signature checks pass but whose body does not match the operation's
+    schema is refused with 400 bad_request (stage 2 operations onwards).
 servers:
   - url: https://{host}:8443
     description: Production core, Tailscale interface only
@@ -303,6 +308,197 @@ paths:
         "400": {$ref: "#/components/responses/Rejected"}
         "401": {$ref: "#/components/responses/Rejected"}
         "403": {$ref: "#/components/responses/Rejected"}
+  /v1/data:
+    post:
+      operationId: data.get
+      summary: Current values of data sources (Home, pages)
+      description: |
+        One call returns a batch of data_id values. Built-in sources (SPEC §5.4)
+        are always `active`:
+
+          sys.cpu        number, unit "%"      CPU load of the whole Mac, 0..100
+          sys.memory     number, unit "%"      memory in use, 0..100
+          sys.disk_free  number, unit "bytes"  free space on the startup volume
+                                               (integer; the client formats it as
+                                               "112 GB free")
+          rh.status      status   core and agent alive; text names the versions
+          rh.approvals   rows     approvals waiting for the owner, oldest first;
+                                  row id = approval_id (always [] until stage 4)
+          rh.questions   rows     questions of the agent waiting for an answer in
+                                  Chat (always [] until stage 3)
+          rh.activity    rows     the 10 newest log.list entries of filter "all"
+                                  (Home "Last Activity"): row id = log entry id,
+                                  title, subtitle = detail, at = entry ts
+          agents.status  rows     the team from ~/Friend/CLAUDE.md, in file order:
+                                  id and title = agent id, subtitle = its role,
+                                  status.text = working | idle | monitoring |
+                                  stopped | unknown; status.state = ok for working
+                                  and monitoring, off for the rest
+
+        Values are raw; rounding and units on screen are the client's. A data_id
+        that is not built in and not registered (stage 5) is `pending`, which is
+        not an error (SPEC §7.5). A source that failed this time is `error` with
+        a message; the other values in the batch are still returned.
+      x-rh-op: data.get
+      x-rh-key: normal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  uniqueItems: true
+                  items: {$ref: "#/components/schemas/DataId"}
+            example: {ids: [sys.cpu, sys.memory, sys.disk_free, rh.approvals, agents.status]}
+      responses:
+        "200":
+          description: One value per requested id
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [values, server_time]
+                properties:
+                  values:
+                    type: object
+                    description: Keys are exactly the requested ids
+                    propertyNames: {$ref: "#/components/schemas/DataId"}
+                    additionalProperties: {$ref: "#/components/schemas/DataResult"}
+                  server_time: {$ref: "#/components/schemas/Timestamp"}
+              example:
+                values:
+                  sys.cpu: {status: active, type: number, value: 38.4, unit: "%", at: "2026-10-19T12:00:00Z"}
+                  sys.memory: {status: active, type: number, value: 61.2, unit: "%", at: "2026-10-19T12:00:00Z"}
+                  sys.disk_free: {status: active, type: number, value: 112400000000, unit: bytes, at: "2026-10-19T12:00:00Z"}
+                  rh.approvals: {status: active, type: rows, value: [], at: "2026-10-19T12:00:00Z"}
+                  agents.status:
+                    status: active
+                    type: rows
+                    at: "2026-10-19T12:00:00Z"
+                    value:
+                      - {id: Friend, title: Friend, subtitle: observer, status: {state: ok, text: monitoring}}
+                      - {id: RemoteHands, title: RemoteHands, subtitle: executor on the Mac, status: {state: "off", text: unknown}}
+                  render.queue: {status: pending}
+                server_time: "2026-10-19T12:00:00Z"
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
+  /v1/log:
+    post:
+      operationId: log.list
+      summary: The Log tab feed, newest first (SPEC §8.5)
+      description: |
+        Built from the core journal (and, from stage 3, chat messages). Every
+        entry has a kind; the filter picks kinds:
+
+          all        every entry below
+          commands   kind command: what changed, written when it happens:
+                     pairing, device revoked (later: action calls, registrations,
+                     page changes, chat stop / reset)
+          approvals  kind approval (stage 4)
+          chat       kind chat (stage 3): one entry per message, title = author
+                     ("owner" or "RemoteHands"), detail = text
+          errors     kind error: rejected requests, rejected pairing, failures
+
+        Kind system (core started / stopped and the like) shows only under all.
+        Accepted requests stay in the journal file but are not in the feed by
+        default: reads (ping, status, devices.list, data.get, log.list,
+        quick.list, ws.open) are noise, and for a command the feed shows its
+        effect instead of the request (one entry "Revoked Мой iPhone", not two).
+        With include_reads: true they are in the feed too, as kind system
+        (title "Accepted <op>"), under filter all.
+
+        `query` is a case-insensitive substring match over title, detail, event,
+        op and device. `before` is the `next` value of the previous page; pages
+        do not shift when new entries arrive. Pull-to-refresh omits `before`.
+      x-rh-op: log.list
+      x-rh-key: normal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                filter: {enum: [all, commands, approvals, chat, errors], default: all}
+                query: {type: string, maxLength: 200}
+                before: {type: string, description: Opaque cursor from `next`}
+                limit: {type: integer, minimum: 1, maximum: 200, default: 50}
+                include_reads: {type: boolean, default: false, description: Also list accepted requests (kind system)}
+            example: {filter: errors, query: ping, limit: 50}
+      responses:
+        "200":
+          description: A page of entries
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [entries, next]
+                properties:
+                  entries:
+                    type: array
+                    items: {$ref: "#/components/schemas/LogEntry"}
+                  next:
+                    type: [string, "null"]
+                    description: Cursor for the next (older) page; null when there is none
+              example:
+                entries:
+                  - id: 9b1f6c0e5a7d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f
+                    ts: "2026-10-19T12:00:05Z"
+                    kind: error
+                    event: request
+                    title: "Rejected ping: bad_signature"
+                    detail: signature does not verify
+                    device: 3f2a9c0d1e4b5a6f7081928374655647
+                    op: ping
+                  - id: 1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d
+                    ts: "2026-10-19T11:58:00Z"
+                    kind: command
+                    event: pairing
+                    title: "Paired Мой iPhone"
+                    detail: "fingerprint 3f2a 9c0d 1e4b 5a6f"
+                    device: 3f2a9c0d1e4b5a6f7081928374655647
+                next: "MjAyNjEwMTk6MTI"
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
+  /v1/quick:
+    get:
+      operationId: quick.list
+      summary: Quick Access on Home (SPEC §8.2)
+      description: Pinned pages and actions in the owner's order. Always empty until stage 5 adds quick.pin / quick.unpin.
+      x-rh-op: quick.list
+      x-rh-key: normal
+      responses:
+        "200":
+          description: Pinned items
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/QuickItem"}
+              example: {items: []}
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
 components:
   headers:
     ServerSig:
@@ -328,6 +524,105 @@ components:
       type: string
       pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
       description: UTC, whole seconds
+    DataId:
+      type: string
+      maxLength: 64
+      pattern: "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+      description: data_id, e.g. sys.cpu or render.queue
+    StatusValue:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state: {enum: [ok, warn, error, "off"]}
+        text: {type: string}
+      description: Value of type status (SPEC §7.3)
+    Row:
+      type: object
+      additionalProperties: false
+      required: [id, title]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        subtitle: {type: string}
+        status: {$ref: "#/components/schemas/StatusValue"}
+        at: {$ref: "#/components/schemas/Timestamp", description: "When the row's event happened, if it has one"}
+      description: One element of a value of type rows (SPEC §7.3, plus optional at)
+    DataResult:
+      oneOf:
+        - $ref: "#/components/schemas/DataActive"
+        - $ref: "#/components/schemas/DataPending"
+        - $ref: "#/components/schemas/DataError"
+      discriminator:
+        propertyName: status
+        mapping:
+          active: "#/components/schemas/DataActive"
+          pending: "#/components/schemas/DataPending"
+          error: "#/components/schemas/DataError"
+    DataActive:
+      type: object
+      additionalProperties: false
+      required: [status, type, value, at]
+      properties:
+        status: {const: active}
+        type: {enum: [number, string, bool, status, rows, text]}
+        value: {description: "Shape set by type, see allOf"}
+        unit: {type: string, description: "Only for type number, e.g. \"%\" or \"bytes\""}
+        at: {$ref: "#/components/schemas/Timestamp", description: "When the value was read"}
+      allOf:
+        - if: {properties: {type: {const: number}}}
+          then: {properties: {value: {type: number}}}
+        - if: {properties: {type: {const: string}}}
+          then: {properties: {value: {type: string}}}
+        - if: {properties: {type: {const: bool}}}
+          then: {properties: {value: {type: boolean}}}
+        - if: {properties: {type: {const: status}}}
+          then: {properties: {value: {$ref: "#/components/schemas/StatusValue"}}}
+        - if: {properties: {type: {const: rows}}}
+          then: {properties: {value: {type: array, items: {$ref: "#/components/schemas/Row"}}}}
+        - if: {properties: {type: {const: text}}}
+          then: {properties: {value: {type: string}}}
+        - if: {not: {properties: {type: {const: number}}}}
+          then: {not: {required: [unit]}}
+    DataPending:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {const: pending}
+      description: Not built in and not registered (yet); the element shows as pending
+    DataError:
+      type: object
+      additionalProperties: false
+      required: [status, message]
+      properties:
+        status: {const: error}
+        message: {type: string}
+    LogEntry:
+      type: object
+      additionalProperties: false
+      required: [id, ts, kind, event, title]
+      properties:
+        id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: sha256 hex of the journal line (the next line's `prev`)
+        ts: {$ref: "#/components/schemas/Timestamp"}
+        kind: {enum: [command, approval, chat, error, system]}
+        event: {type: string, description: "Journal event, e.g. request, pairing, device.revoked"}
+        title: {type: string, description: One line, English, ready to show}
+        detail: {type: string}
+        device: {$ref: "#/components/schemas/DeviceId"}
+        op: {type: string}
+    QuickItem:
+      type: object
+      additionalProperties: false
+      required: [kind, id, title]
+      properties:
+        kind: {enum: [page, action]}
+        id: {type: string, description: page id or action_id}
+        title: {type: string}
+        icon: {type: string, description: SF Symbol name}
     NotFound:
       type: object
       additionalProperties: false
@@ -374,6 +669,7 @@ components:
         - bad_pair_code
         - pair_rejected
         - peer_mismatch
+        - bad_request
   securitySchemes:
     rhAuth:
       type: apiKey
