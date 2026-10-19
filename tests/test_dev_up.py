@@ -58,6 +58,15 @@ def run_dev_core(data: Path, *extra: str, ready: Path) -> Iterator[str]:
             assert proc.poll() is None, proc.stdout.read() if proc.stdout else ""
             assert time.monotonic() < deadline, "dev core did not start"
             time.sleep(0.1)
+        # admin.sock can appear before uvicorn listens: wait for the port too.
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                assert proc.poll() is None, proc.stdout.read() if proc.stdout else ""
+                assert time.monotonic() < deadline, "dev core did not listen"
+                time.sleep(0.1)
         yield f"127.0.0.1:{port}"
     finally:
         proc.terminate()

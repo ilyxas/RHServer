@@ -2,7 +2,7 @@
 
 `rhcore pair` opens a session over the admin socket: the core makes a one-time
 code (5 minutes) and a pairing string for the QR. When the phone's /v1/pair
-request passes verification it waits here until Илья answers y/n in the
+request passes verification it waits here until the owner answers y/n in the
 terminal or the code expires; the code is spent only when pairing succeeds.
 One session at a time: a new `rhcore pair` cancels the previous one.
 """

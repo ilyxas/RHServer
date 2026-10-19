@@ -141,10 +141,10 @@
     {
       "name": "approval-like-object",
       "scope": "protocol",
-      "input": "{\"what\":\"Удаление каталога\",\"command\":\"rm -rf ~/tmp/build\",\"paths\":[\"/Users/ilya/tmp/build\"],\"urls\":[],\"explain\":\"чистка \\\"кэша\\\"\",\"n\":3}",
-      "expected": "{\"command\":\"rm -rf ~/tmp/build\",\"explain\":\"чистка \\\"кэша\\\"\",\"n\":3,\"paths\":[\"/Users/ilya/tmp/build\"],\"urls\":[],\"what\":\"Удаление каталога\"}",
-      "expected_hex": "7b22636f6d6d616e64223a22726d202d7266207e2f746d702f6275696c64222c226578706c61696e223a22d187d0b8d181d182d0bad0b0205c22d0bad18dd188d0b05c22222c226e223a332c227061746873223a5b222f55736572732f696c79612f746d702f6275696c64225d2c2275726c73223a5b5d2c2277686174223a22d0a3d0b4d0b0d0bbd0b5d0bdd0b8d0b520d0bad0b0d182d0b0d0bbd0bed0b3d0b0227d",
-      "expected_sha256": "d437aeb7f0530ed92b52aec1cfcf1cc23f0237cb176e2a71ca565f5670c9ac6b"
+      "input": "{\"what\":\"Удаление каталога\",\"command\":\"rm -rf ~/tmp/build\",\"paths\":[\"/Users/owner/tmp/build\"],\"urls\":[],\"explain\":\"чистка \\\"кэша\\\"\",\"n\":3}",
+      "expected": "{\"command\":\"rm -rf ~/tmp/build\",\"explain\":\"чистка \\\"кэша\\\"\",\"n\":3,\"paths\":[\"/Users/owner/tmp/build\"],\"urls\":[],\"what\":\"Удаление каталога\"}",
+      "expected_hex": "7b22636f6d6d616e64223a22726d202d7266207e2f746d702f6275696c64222c226578706c61696e223a22d187d0b8d181d182d0bad0b0205c22d0bad18dd188d0b05c22222c226e223a332c227061746873223a5b222f55736572732f6f776e65722f746d702f6275696c64225d2c2275726c73223a5b5d2c2277686174223a22d0a3d0b4d0b0d0bbd0b5d0bdd0b8d0b520d0bad0b0d182d0b0d0bbd0bed0b3d0b0227d",
+      "expected_sha256": "804ae5dddaaac474025a7b8b1a2c4f92316bbf8190101fa8d063c96f1045a4b8"
     },
     {
       "name": "rfc8785-example",

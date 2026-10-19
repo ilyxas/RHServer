@@ -34,9 +34,9 @@
       "name": "pair-200-signs-code",
       "request_nonce": "3YO4PGkMMdRj4og3mLqkMc7HPEOyMGN4xrmHxj6cRkY=",
       "status": 200,
-      "body_b64": "eyJkZXZpY2VfaWQiOiAiMWIwYzkzOTE3MmY1OTQ2YzdkZDlmNmY1NDBlM2FjNTgiLCAibWFjX25hbWUiOiAiaWx5YXMtTWFjQm9vay1BaXIiLCAic3NoX2hvc3Rfa2V5cyI6IFtdfQ==",
-      "expected_message_text": "{\"body\":\"19df62953bcd1092f590894676112105057a818c2b0a4e7db73550f1cc30406a\",\"nonce\":\"3YO4PGkMMdRj4og3mLqkMc7HPEOyMGN4xrmHxj6cRkY=\",\"status\":200,\"v\":1}",
-      "sig_der_b64": "MEUCIEA92pMtlHKGIGWh/L4VJ18iykC6DUAAH9V9Sixuf5xcAiEA/1cdPcpblAXIsvqaQztjn74tyY9oX3Vdqp1dbuZdkBg=",
+      "body_b64": "eyJkZXZpY2VfaWQiOiAiMWIwYzkzOTE3MmY1OTQ2YzdkZDlmNmY1NDBlM2FjNTgiLCAibWFjX25hbWUiOiAiTWFjIiwgInNzaF9ob3N0X2tleXMiOiBbXX0=",
+      "expected_message_text": "{\"body\":\"b478b26e786b7e46193970252a4c59a974d7aafd9fbe73a4e4e2292882a15e01\",\"nonce\":\"3YO4PGkMMdRj4og3mLqkMc7HPEOyMGN4xrmHxj6cRkY=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEQCICKMZtHv4SFbgL7rJUeNA4QeWyc0gDxW355cTyOM8/u2AiBtpyexsHidLssV/BkIXQWPw46NeK9uiRc40GzHpGMLVQ==",
       "valid": true
     },
     {

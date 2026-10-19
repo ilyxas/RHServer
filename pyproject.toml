@@ -41,7 +41,7 @@ packages = ["src/rh_common", "src/rh_core", "src/rh_agent", "src/rh_cli"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
-    "mac: needs real macOS (run on Илья's Mac)",
+    "mac: needs real macOS (run on the owner's Mac)",
 ]
 filterwarnings = [
     # starlette.testclient on top of httpx: fine for our tests.

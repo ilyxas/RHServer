@@ -28,7 +28,7 @@ from rh_common.protocol import (
 
 @dataclass
 class Phone:
-    name: str = "iPhone Ильи"
+    name: str = "Мой iPhone"
     keys: dict[str, ec.EllipticCurvePrivateKey] = field(
         default_factory=lambda: {
             level: generate_private_key() for level in ("normal", "critical", "ssh")

@@ -1,5 +1,9 @@
 # contracts/ changelog
 
+## Stage 1, placeholders
+
+- Vectors and docs carry no real names, user names or host names: fixture names are neutral (`Мой iPhone`, `Mac`, `/Users/owner/...`, `mac.tail1234.ts.net`). Only values changed, not formats. `signed_requests.json`, `server_sig.json`, `pairing.json` and `jcs.json` are regenerated, so their bytes and signatures differ.
+
 ## Stage 1
 
 - `api/openapi.yaml` 0.1.0: `/v1/challenge`, `/v1/pair`, `/v1/ping`, `/v1/status`, `/v1/devices`, `/v1/devices/revoke`, `/v1/ws`; order of checks, HTTP status per code, pairing string, device id, fingerprint; `X-RH-Sig-Critical`; `x-rh-key: normal+critical` for pair.

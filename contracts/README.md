@@ -45,7 +45,7 @@ RHClient keeps a full copy of this folder plus `contracts/UPSTREAM` with the RHS
 ## Changing a contract
 
 1. PR in RHServer that changes `contracts/`, updates `MANIFEST.sha256` and adds a line to `CHANGELOG.md`.
-2. The iOS agent reviews it; Илья merges.
+2. The iOS agent reviews it; the owner merges.
 3. RHClient syncs to that SHA on purpose, in a separate commit `sync contracts @<sha>`.
 
 Both sides may start work against a pinned SHA before the merge.

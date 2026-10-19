@@ -69,7 +69,7 @@ JCS_CASES: list[tuple[str, str, str]] = [
         "approval-like-object",
         "protocol",
         '{"what":"Удаление каталога","command":"rm -rf ~/tmp/build",'
-        '"paths":["/Users/ilya/tmp/build"],"urls":[],"explain":"чистка \\"кэша\\"",'
+        '"paths":["/Users/owner/tmp/build"],"urls":[],"explain":"чистка \\"кэша\\"",'
         '"n":3}',
     ),
     (
