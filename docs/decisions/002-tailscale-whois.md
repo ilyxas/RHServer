@@ -14,9 +14,13 @@
   - App Store: порт и токен находятся через `lsof` процесса `IPNExtension` вошедшего пользователя; другим пользователям недоступно.
 - CLI `tailscale whois --json <ip>` сам выбирает нужный способ для любого варианта.
 
+## На Mac Ильи (2026-10-19)
+
+`defaults read /Applications/Tailscale.app/Contents/Info.plist CFBundleIdentifier` → `io.tailscale.ipn.macsys` (Standalone), `which tailscale` → `/usr/local/bin/tailscale`. Ядро находит CLI через PATH без ключа `tailscale` в конфиге.
+
 ## Следствие для кода
 
 - `rh_core.peers.TailscaleWhois` вызывает `tailscale whois --json <ip>` (путь — ключ конфига `tailscale`, иначе `tailscale` из PATH, иначе `/Applications/Tailscale.app/Contents/MacOS/Tailscale`) и берёт `Node.StableID`; ответ кэшируется на 60 секунд по IP. Своя реализация трёх способов доступа к LocalAPI не нужна: CLI — официальный клиент того же LocalAPI.
 - При pairing ядро запоминает узел; каждый подписанный запрос с другого узла или с неизвестного (whois не ответил) — отказ `peer_mismatch` и запись в журнал. Pairing без определённого узла тоже отклоняется.
 - Этапы 1–6 ядро работает под пользователем Ильи — whois работает при любом варианте.
-- **Вопрос к этапу 7 (не к этапу 1):** под `_rhcore` whois доступен только с open-source `tailscaled`. При App Store / Standalone `_rhcore` не сможет сверять отправителя. Варианты решу с Ильёй перед этапом 7.
+- **Вопрос к этапу 7 (не к этапу 1):** под `_rhcore` whois доступен только с open-source `tailscaled`. У Ильи Standalone: токен LocalAPI читают только root и группа admin, так что `_rhcore` сверять отправителя не сможет. Варианты (перейти на `tailscaled`, отдельный помощник с правами чтения токена и т. п.) решу с Ильёй перед этапом 7.

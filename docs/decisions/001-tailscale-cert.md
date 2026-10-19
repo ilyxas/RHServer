@@ -12,7 +12,8 @@
   - App Store (`io.tailscale.ipn.macos`): CLI в песочнице, файлы оказываются в `~/Library/Containers/io.tailscale.ipn.macos/Data/…` (CLI предупреждает об этом). Работает только под вошедшим пользователем.
   - Standalone (`io.tailscale.ipn.macsys`): доступ через токен LocalAPI `/Library/Tailscale/sameuserproof-*` (root:admin, 0640) — у пользователя-администратора есть.
   - open-source `tailscaled`: выдаёт сертификат root, оператору или UID из `TS_PERMIT_CERT_UID`; остальным 403.
-  - Нужен ли sudo на App Store / Standalone под пользователем Ильи — по коду не подтверждено; проверяется одной командой на Mac (см. PR этапа 1).
+  - Нужен ли sudo на App Store / Standalone под пользователем Ильи — по коду не подтверждено; проверяется первым выпуском сертификата на Mac.
+- На Mac Ильи (2026-10-19): Standalone (`io.tailscale.ipn.macsys`), CLI `/usr/local/bin/tailscale`, не в песочнице — файлы пишутся по путям из `--cert-file`/`--key-file`.
 - Срок — 90 дней. Файлы на диске продлевает только повторный `tailscale cert` (он перезаписывает их лишь при изменении); частые запросы упираются в лимиты Let's Encrypt. Фоновое обновление в демоне работает только при `tailscale serve` с HTTPS.
 - iOS доверяет ISRG Root X1 с iOS 10, исключение ATS не нужно. Что `*.ts.net`-сертификат проходит все правила ATS — вывод, проверим первым настоящим запросом с iPhone.
 
