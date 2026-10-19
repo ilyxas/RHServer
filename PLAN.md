@@ -130,7 +130,7 @@ contracts/
 ## Этап 0. Каркас
 
 **Задачи**
-1. `pyproject.toml` (Python ≥ 3.12, uv; на Mac Ильи в PATH только системный Python 3.9.6 — uv сам ставит управляемый Python 3.12 через `.python-version`, без sudo и без brew; установка uv — один шаг в инструкции Илье), пакеты `rh_common`, `rh_core`, `rh_agent`, `rh_cli`; entry points `rhcore`, `rhpage`, `rh-agent` (пока заглушки с `--version`).
+1. `pyproject.toml` (Python ≥ 3.12, uv; на Mac Ильи в PATH только системный Python 3.9.6 — uv сам ставит управляемый Python 3.12 через `.python-version`, без sudo и без brew; на 2026-10-19 на Mac уже стоят uv 0.13.1 (Homebrew) и Python 3.12.15 через uv), пакеты `rh_common`, `rh_core`, `rh_agent`, `rh_cli`; entry points `rhcore`, `rhpage`, `rh-agent` (пока заглушки с `--version`).
 2. `CLAUDE.md` для агентов-разработчиков RHServer: правила SPEC §10 и PROCESS (без sudo, без деплоя, [проверить] → `docs/decisions/`, `contracts/` только через ревью iOS, формат PR).
 3. `contracts/`: `README.md`, `CHANGELOG.md`, `MANIFEST.sha256` + `scripts/contracts_manifest.py`, скелет `api/openapi.yaml` (info, servers, общие схемы `Error`, описание схемы подписи, `x-rh-op`/`x-rh-key`), `vectors/jcs.json`.
 4. `rh_common/jcs.py` — RFC 8785; генератор векторов `scripts/gen_vectors.py` (векторы воспроизводимы, генератор — в репо).
