@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import socket
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -11,7 +13,7 @@ import uvicorn
 
 from rh_common.protocol import format_ts
 from rh_core.app import Core, create_app
-from rh_core.config import Config
+from rh_core.config import DEV_HOST, DEV_PORT, Config
 from rh_core.peers import LocalPeers, PeerLookup, TailscaleWhois
 
 Job = Callable[[Core], Awaitable[None]]
@@ -62,7 +64,38 @@ def auto_pair(announce: Callable[[str], None], pairing_file: Path | None) -> Job
     return job
 
 
-def run(config: Config, *, background: list[Job] | None = None) -> None:
+def dev_socket(port: int | None = None) -> socket.socket:
+    """The bound 127.0.0.1 socket for a dev core.
+
+    An explicit port must be free. Without one the core takes DEV_PORT, or any
+    free port when something else already listens there; the pairing string
+    carries the URL, so clients learn the port from it.
+    """
+    if port is not None:
+        return _bind(port)
+    try:
+        socket.create_connection((DEV_HOST, DEV_PORT), timeout=0.5).close()
+    except OSError:  # nobody answers: try to take it
+        with contextlib.suppress(OSError):
+            return _bind(DEV_PORT)
+    return _bind(0)
+
+
+def _bind(port: int) -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((DEV_HOST, port))
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def run(
+    config: Config, *, background: list[Job] | None = None, sock: socket.socket | None = None
+) -> None:
+    """Serve until stopped; `sock` is an already bound socket (dev mode)."""
     core = build_core(config)
     server: uvicorn.Server
 
@@ -89,4 +122,4 @@ def run(config: Config, *, background: list[Job] | None = None) -> None:
             log_level="info",
         )
     )
-    server.run()
+    server.run(sockets=[sock] if sock is not None else None)

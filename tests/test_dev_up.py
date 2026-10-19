@@ -22,6 +22,7 @@ from websockets.sync.client import connect
 from refclient import Phone
 from rh_common.crypto import b64d
 from rh_common.protocol import decode_pairing_string
+from rh_core.config import DEV_PORT
 from rh_core.journal import verify
 
 
@@ -271,32 +272,72 @@ def test_retry_takes_over_a_request_the_core_still_waits_on(short_dir: Path) -> 
     assert verify(data / "journal") == []
 
 
-def test_busy_port_writes_no_pairing_file(short_dir: Path) -> None:
-    """Another program holds the port: the dev core exits without a pairing file,
-    so a UI test never takes it for a running core."""
+def dev_up_args(data: Path, *extra: str) -> list[str]:
+    return [
+        sys.executable,
+        "-c",
+        "import sys; from rh_cli.rhcore import main; sys.exit(main())",
+        "dev",
+        "up",
+        "--data",
+        str(data),
+        *extra,
+    ]
+
+
+def test_busy_explicit_port_writes_no_pairing_file(short_dir: Path) -> None:
+    """Another program holds the port asked for: the dev core exits without a
+    pairing file, so a UI test never takes it for a running core."""
     pairing = short_dir / "pairing.txt"
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
         busy.listen()
         port = busy.getsockname()[1]
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; from rh_cli.rhcore import main; sys.exit(main())",
-                "dev",
-                "up",
-                "--data",
-                str(short_dir / "data"),
+            dev_up_args(
+                short_dir / "data",
                 "--port",
                 str(port),
                 "--auto-pair",
                 "--pairing-file",
                 str(pairing),
-            ],
+            ),
             capture_output=True,
             text=True,
             timeout=20,
         )
     assert proc.returncode != 0
     assert not pairing.exists()
+
+
+def test_taken_default_port_falls_back_to_a_free_one(short_dir: Path) -> None:
+    """Something else (a dashboard, say) listens on 8787: without --port the dev
+    core takes a free port and the pairing string tells the client which."""
+    pairing = short_dir / "pairing.txt"
+    holder = socket.socket()
+    try:
+        holder.bind(("127.0.0.1", DEV_PORT))
+        holder.listen()
+    except OSError:  # already taken by someone else: just as good
+        holder.close()
+    proc = subprocess.Popen(
+        dev_up_args(short_dir / "data", "--auto-pair", "--pairing-file", str(pairing)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not pairing.exists():
+            assert proc.poll() is None, proc.stdout.read() if proc.stdout else ""
+            assert time.monotonic() < deadline, "dev core did not start"
+            time.sleep(0.1)
+        ps = decode_pairing_string(pairing.read_text().strip())
+        port = int(ps.url.rsplit(":", 1)[1])
+        assert port != DEV_PORT
+        r = httpx.post(f"{ps.url}/v1/challenge", json={"device": "x"}, timeout=10)
+        assert r.status_code == 400 and "error" in r.json()  # the core answers, not the holder
+    finally:
+        proc.terminate()
+        proc.wait(10)
+        holder.close()
