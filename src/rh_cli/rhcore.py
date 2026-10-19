@@ -17,6 +17,7 @@ from rh_cli._common import parser
 from rh_common.protocol import parse_ts
 from rh_core import journal
 from rh_core.config import DEFAULT_PATH, DEV_PORT, Config, ConfigError, dev_config, load, to_toml
+from rh_core.system import FakeProbe
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,6 +49,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     up.add_argument(
         "--pairing-file", type=Path, help="with --auto-pair: keep the current pairing string here"
+    )
+    up.add_argument(
+        "--fixture",
+        type=Path,
+        help="fixture directory for UI tests: team.md (agents.status), system.json "
+        '({"cpu", "memory", "disk_free"} instead of the real Mac); e.g. tests/fixtures/stage2',
     )
 
     with_config(sub.add_parser("pair", help="pair a new iPhone or iPad"))
@@ -112,7 +119,12 @@ def _dev_up(args: argparse.Namespace) -> int:
         print(f"порт {DEV_PORT} занят, ядро слушает {port}")
     data = args.data or Path(tempfile.mkdtemp(prefix="rh-dev-", dir="/tmp"))
     data = data.expanduser().resolve()
-    cfg = dev_config(data, port=port)
+    try:
+        team_file, probe = _fixture(args.fixture)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"rhcore: fixture {args.fixture}: {e}", file=sys.stderr)
+        return 2
+    cfg = dev_config(data, port=port, team_file=team_file)
     cfg.validate()
     data.mkdir(parents=True, exist_ok=True)
     config_path = data / "core.toml"
@@ -127,8 +139,27 @@ def _dev_up(args: argparse.Namespace) -> int:
         print("rhcore: --pairing-file works only with --auto-pair", file=sys.stderr)
         return 2
     sys.stdout.flush()
-    run(cfg, background=jobs, sock=sock)
+    run(cfg, background=jobs, sock=sock, probe=probe)
     return 0
+
+
+def _fixture(directory: Path | None) -> tuple[Path | None, FakeProbe | None]:
+    if directory is None:
+        return None, None
+    directory = directory.expanduser().resolve()
+    if not directory.is_dir():
+        raise ValueError("not a directory")
+    team = directory / "team.md"
+    system = directory / "system.json"
+    probe = None
+    if system.exists():
+        doc = json.loads(system.read_text(encoding="utf-8"))
+        if set(doc) != {"cpu", "memory", "disk_free"}:
+            raise ValueError('system.json must be {"cpu", "memory", "disk_free"}')
+        probe = FakeProbe(
+            cpu=float(doc["cpu"]), memory=float(doc["memory"]), disk=int(doc["disk_free"])
+        )
+    return (team if team.exists() else None), probe
 
 
 # --- admin socket client ------------------------------------------------------------

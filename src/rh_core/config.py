@@ -15,12 +15,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from rh_core.agent_rules import WHEN_RUNNING, Rule
+
 Mode = Literal["dev", "production"]
 
 DEV_HOST = "127.0.0.1"
 DEV_PORT = 8787
 PRODUCTION_PORT = 8443
 CORE_USER = "_rhcore"
+TEAM_FILE = Path("~/Friend/CLAUDE.md").expanduser()
 
 
 class ConfigError(ValueError):
@@ -39,6 +42,9 @@ class Config:
     tls_key: Path | None = None
     whois: bool = True
     tailscale: str | None = None  # path to the tailscale CLI; found automatically if unset
+    team_file: Path | None = TEAM_FILE  # agents.status; None: no team
+    team_skip: tuple[str, ...] = ()  # team ids that are not agents (the owner)
+    agent_rules: tuple[Rule, ...] = ()  # agents.status rules; agents without one: unknown
 
     @property
     def db_path(self) -> Path:
@@ -101,6 +107,7 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
         "tls_key",
         "whois",
         "tailscale",
+        "agents",
     }
     unknown = set(doc) - known
     if unknown:
@@ -133,10 +140,88 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
         kwargs["tailscale"] = str(doc["tailscale"])
     if "mac_name" in doc:
         kwargs["mac_name"] = str(doc["mac_name"])
+    kwargs.update(_agents(doc.get("agents", {}), base))
     return Config(**kwargs)
 
 
-def dev_config(data_dir: Path, *, port: int = DEV_PORT) -> Config:
+def _agents(table: Any, base: Path) -> dict[str, Any]:
+    """[agents]: team_file (path or "" for no team), skip (ids that are not agents),
+    [[agents.rule]] (status rules, see rh_core.agent_rules)."""
+    if not isinstance(table, dict):
+        raise ConfigError("[agents] must be a table")
+    unknown = set(table) - {"team_file", "skip", "rule"}
+    if unknown:
+        raise ConfigError(f"unknown [agents] keys: {sorted(unknown)}")
+    out: dict[str, Any] = {}
+    if "team_file" in table:
+        value = str(table["team_file"])
+        p = Path(value).expanduser()
+        out["team_file"] = None if not value else (p if p.is_absolute() else base / p)
+    skip = table.get("skip", [])
+    if not isinstance(skip, list) or not all(isinstance(s, str) for s in skip):
+        raise ConfigError("[agents] skip must be a list of strings")
+    out["team_skip"] = tuple(skip)
+    rules = table.get("rule", [])
+    if not isinstance(rules, list):
+        raise ConfigError("[[agents.rule]] must be an array of tables")
+    out["agent_rules"] = tuple(_rule(r, base) for r in rules)
+    ids = [r.id for r in out["agent_rules"]]
+    if len(set(ids)) != len(ids):
+        raise ConfigError("[[agents.rule]]: one rule per agent id")
+    return out
+
+
+_RULE_KEYS = {
+    "id",
+    "process",
+    "cwd",
+    "transcripts",
+    "working_within_s",
+    "when_running",
+    "stale_after_s",
+}
+
+
+def _rule(doc: Any, base: Path) -> Rule:
+    if not isinstance(doc, dict):
+        raise ConfigError("[[agents.rule]] entries must be tables")
+    where = f"[[agents.rule]] {doc.get('id', '?')}"
+    unknown = set(doc) - _RULE_KEYS
+    if unknown:
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
+    for key in ("id", "process"):
+        if not isinstance(doc.get(key), str) or not doc[key]:
+            raise ConfigError(f"{where}: {key} is required")
+    for key in ("cwd", "transcripts", "when_running"):
+        if key in doc and not isinstance(doc[key], str):
+            raise ConfigError(f"{where}: {key} must be a string")
+    for key in ("working_within_s", "stale_after_s"):
+        value = doc.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ConfigError(f"{where}: {key} must be a positive integer (seconds)")
+    when = doc.get("when_running")
+    if when is not None and when not in WHEN_RUNNING:
+        raise ConfigError(f"{where}: when_running must be one of {list(WHEN_RUNNING)}")
+    cwd = None
+    if "cwd" in doc:
+        cwd = Path(doc["cwd"]).expanduser()
+        if not cwd.is_absolute():
+            raise ConfigError(f"{where}: cwd must be absolute or start with ~")
+    return Rule(
+        id=doc["id"],
+        process=doc["process"],
+        cwd=cwd,
+        transcripts=doc.get("transcripts"),
+        working_within_s=doc.get("working_within_s", Rule.working_within_s),
+        when_running=when,
+        stale_after_s=doc.get("stale_after_s"),
+    )
+
+
+def dev_config(data_dir: Path, *, port: int = DEV_PORT, team_file: Path | None = None) -> Config:
+    """Dev core: no team unless one is given (UI tests use tests/fixtures/stage2/team.md)."""
     return Config(
         mode="dev",
         data_dir=data_dir,
@@ -144,6 +229,7 @@ def dev_config(data_dir: Path, *, port: int = DEV_PORT) -> Config:
         host=DEV_HOST,
         port=port,
         whois=False,
+        team_file=team_file,
     )
 
 
@@ -166,4 +252,6 @@ def to_toml(cfg: Config) -> str:
         value = getattr(cfg, name)
         if value:
             lines.append(f"{name} = {q(value)}")
+    lines += ["", "[agents]", f"team_file = {q(cfg.team_file or '')}"]
+    lines.append(f"skip = [{', '.join(q(s) for s in cfg.team_skip)}]")
     return "\n".join(lines) + "\n"

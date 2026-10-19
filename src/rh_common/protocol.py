@@ -46,6 +46,7 @@ HEADER_SERVER_SIG = "X-RH-Server-Sig"
 # itself is refused.
 ERROR_STATUS: dict[str, int] = {
     "malformed_auth": 400,
+    "bad_request": 400,  # signature fine, body does not fit the operation (stage 2+)
     "op_mismatch": 401,
     "wrong_key_level": 401,
     "bad_signature": 401,

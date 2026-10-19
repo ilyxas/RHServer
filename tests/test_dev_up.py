@@ -352,3 +352,36 @@ def test_explicit_port_next_to_a_wildcard_listener_is_taken() -> None:
         other.listen()
         with pytest.raises(OSError):
             dev_socket(other.getsockname()[1])
+
+
+def test_fixture_feeds_home(short_dir: Path) -> None:
+    """`--fixture tests/fixtures/stage2`: fixed metrics and team for client UI tests."""
+    pairing = short_dir / "pairing.txt"
+    fixture = Path(__file__).parent / "fixtures" / "stage2"
+    extra = ("--auto-pair", "--pairing-file", str(pairing), "--fixture", str(fixture))
+    with run_dev_core(short_dir / "data", *extra, ready=pairing):
+        ps = decode_pairing_string(pairing.read_text().strip())
+        phone = Phone()
+        phone.core_key = b64d(ps.core_key)
+        with httpx.Client(base_url=ps.url, timeout=10) as http:
+            body = phone.pair_body()
+            r = http.post("/v1/pair", headers=phone.pair_headers(ps.code, body), content=body)
+            assert r.status_code == 200, r.text
+            nonce = http.post("/v1/challenge", json={"device": phone.id}).json()["nonce"]
+            body = json.dumps({"ids": ["sys.cpu", "sys.disk_free", "agents.status"]}).encode()
+            r = http.post(
+                "/v1/data",
+                headers=phone.headers(op="data.get", key="normal", nonce=nonce, body=body),
+                content=body,
+            )
+            assert r.status_code == 200, r.text
+            phone.check_response(nonce, 200, r.headers, r.content)
+            values = r.json()["values"]
+    assert values["sys.cpu"]["value"] == 38.4
+    assert values["sys.disk_free"]["value"] == 112_400_000_000
+    assert [row["id"] for row in values["agents.status"]["value"]] == [
+        "Friend",
+        "Agent-Alpha",
+        "Agent-Beta",
+        "RemoteHands",
+    ]

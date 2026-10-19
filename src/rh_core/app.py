@@ -1,4 +1,4 @@
-"""rh-core HTTP and WebSocket API (contracts/api/openapi.yaml), stage 1.
+"""rh-core HTTP and WebSocket API (contracts/api/openapi.yaml), stages 1–2.
 
 Every response, rejections included, is signed with the core key
 (X-RH-Server-Sig). Every accepted and rejected request goes to the journal.
@@ -43,12 +43,16 @@ from rh_common.protocol import (
     verify_pair,
     verify_request,
 )
-from rh_core import admin, keys
+from rh_core import admin, keys, logfeed
+from rh_core.agent_rules import ProcessRules
+from rh_core.agents import Team
 from rh_core.config import Config
+from rh_core.data import DataSources, parse_ids
 from rh_core.journal import Journal
 from rh_core.pairing import Candidate, Pairing, Session
 from rh_core.peers import LocalPeers, PeerLookup
 from rh_core.store import Store
+from rh_core.system import PsutilProbe, SystemProbe
 
 _DEVICE_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 WS_CLOSE_REVOKED = 4403
@@ -85,6 +89,7 @@ class Core:
         clock: Callable[[], datetime] | None = None,
         peers: PeerLookup | None = None,
         ssh_host_keys: str = SSH_HOST_KEYS,
+        probe: SystemProbe | None = None,
     ) -> None:
         self.config = config
         self.clock = clock or (lambda: datetime.now(UTC).replace(microsecond=0))
@@ -100,6 +105,23 @@ class Core:
             url=config.public_url, core_key_b64=b64e(self.public_key), clock=self.clock
         )
         self.connections: dict[str, set[Connection]] = {}
+        self.data = DataSources(
+            probe=probe or PsutilProbe(),
+            team=Team(
+                config.team_file,
+                skip=config.team_skip,
+                rules=ProcessRules(config.agent_rules) if config.agent_rules else None,
+            ),
+            journal_dir=config.journal_dir,
+            names=self.device_name,
+            core_version=__version__,
+            agent_version=lambda: None,  # rh-agent arrives at stage 3
+            clock=self.clock,
+        )
+
+    def device_name(self, device_id: str) -> str | None:
+        row = self.store.device_row(device_id)
+        return row.name if row else None
 
     # --- responses -----------------------------------------------------------
 
@@ -152,23 +174,50 @@ class Core:
 
 # --- signed endpoints -----------------------------------------------------------------
 
-Handler = Callable[[Core, Verdict, bytes], Awaitable[tuple[int, dict[str, Any] | None]]]
+Handler = Callable[[Core, Verdict, Any], Awaitable[tuple[int, dict[str, Any] | None]]]
+Parser = Callable[[bytes], Any]
 
 
 def signed_endpoint(
-    op: str, key: KeyLevel, handler: Handler
+    op: str, key: KeyLevel, handler: Handler, parse: Parser | None = None
 ) -> Callable[[Request], Awaitable[Response]]:
+    """A signed operation. With `parse`, the handler gets the parsed body; a body
+    that does not fit is refused with bad_request (stage 2 operations onwards)."""
+
     async def endpoint(request: Request) -> Response:
         core: Core = request.app.state.core
         body = await request.body()
-        verdict = _verify(core, request.headers, body, op, key, request.client)
+        verdict = _verify(core, request.headers, body, op, key, request.client, journal=False)
+        params: Any = body
+        if verdict.error is None and parse is not None:
+            try:
+                params = parse(body)
+            except ValueError as e:
+                verdict = Verdict(
+                    obj=verdict.obj,
+                    device=verdict.device,
+                    error=ProtocolError("bad_request", str(e)),
+                    consume_nonce=False,
+                )
+        _journal_request(core, op, verdict, request.client)
         nonce = verdict.obj.nonce if verdict.obj else ""
         if verdict.error is not None:
             return core.refuse(verdict.error, nonce)
-        status, payload = await handler(core, verdict, body)
+        status, payload = await handler(core, verdict, params)
         return core.signed(status, payload, nonce)
 
     return endpoint
+
+
+def _json_body(parse: Callable[[Any], Any]) -> Parser:
+    def parser(body: bytes) -> Any:
+        try:
+            doc = json.loads(body)
+        except (ValueError, UnicodeDecodeError) as e:
+            raise ValueError("body is not JSON") from e
+        return parse(doc)
+
+    return parser
 
 
 def _verify(
@@ -178,6 +227,8 @@ def _verify(
     op: str,
     key: KeyLevel,
     client: Any,
+    *,
+    journal: bool = True,
 ) -> Verdict:
     verdict = verify_request(
         headers=headers,
@@ -208,6 +259,12 @@ def _verify(
                 error=ProtocolError("peer_mismatch", f"request came from Tailscale node {node!r}"),
                 consume_nonce=False,
             )
+    if journal:
+        _journal_request(core, op, verdict, client)
+    return verdict
+
+
+def _journal_request(core: Core, op: str, verdict: Verdict, client: Any) -> None:
     obj = verdict.obj
     core.journal.append(
         "request",
@@ -218,7 +275,6 @@ def _verify(
         detail=verdict.error.message if verdict.error else None,
         peer=f"{client.host}:{client.port}" if client else None,
     )
-    return verdict
 
 
 async def ping(core: Core, verdict: Verdict, body: bytes) -> tuple[int, dict[str, Any]]:
@@ -254,6 +310,30 @@ async def devices_revoke(core: Core, verdict: Verdict, body: bytes) -> tuple[int
     if not await core.revoke(target, by=by):
         return 404, {"error": {"code": "not_found", "message": f"no device {target}"}}
     return 200, {"device_id": target, "status": "revoked"}
+
+
+async def data_get(core: Core, verdict: Verdict, ids: list[str]) -> tuple[int, dict[str, Any]]:
+    values = await anyio.to_thread.run_sync(core.data.get, ids)
+    return 200, {"values": values, "server_time": format_ts(core.clock())}
+
+
+async def log_list(core: Core, verdict: Verdict, q: logfeed.Query) -> tuple[int, dict[str, Any]]:
+    entries, next_ = await anyio.to_thread.run_sync(
+        lambda: logfeed.page(
+            core.config.journal_dir,
+            names=core.device_name,
+            filter=q.filter,
+            query=q.query,
+            before=q.before,
+            limit=q.limit,
+            include_reads=q.include_reads,
+        )
+    )
+    return 200, {"entries": entries, "next": next_}
+
+
+async def quick_list(core: Core, verdict: Verdict, body: bytes) -> tuple[int, dict[str, Any]]:
+    return 200, {"items": []}  # quick.pin / quick.unpin arrive at stage 5
 
 
 # --- unsigned and special endpoints ------------------------------------------------------
@@ -474,6 +554,17 @@ def create_app(
             signed_endpoint("devices.revoke", "critical", devices_revoke),
             methods=["POST"],
         ),
+        Route(
+            "/v1/data",
+            signed_endpoint("data.get", "normal", data_get, _json_body(parse_ids)),
+            methods=["POST"],
+        ),
+        Route(
+            "/v1/log",
+            signed_endpoint("log.list", "normal", log_list, _json_body(logfeed.parse_query)),
+            methods=["POST"],
+        ),
+        Route("/v1/quick", signed_endpoint("quick.list", "normal", quick_list), methods=["GET"]),
         WebSocketRoute("/v1/ws", ws_open),
     ]
     app = Starlette(routes=routes, lifespan=lifespan)

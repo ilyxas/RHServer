@@ -8,13 +8,11 @@ from types import ModuleType
 
 import pytest
 import yaml
-from jsonschema import Draft202012Validator
 from openapi_spec_validator import validate
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
+
+from openapi_util import _openapi, openapi_validator
 
 ROOT = Path(__file__).parent.parent
-OPENAPI_URI = "urn:rh:openapi"
 
 
 def _load(name: str) -> ModuleType:
@@ -67,20 +65,6 @@ def test_manifest_format() -> None:
 def test_vector_files_are_valid_json() -> None:
     for path in (ROOT / "contracts/vectors").glob("*.json"):
         json.loads(path.read_text(encoding="utf-8"))
-
-
-def _openapi() -> dict[str, object]:
-    doc: dict[str, object] = yaml.safe_load(
-        (ROOT / "contracts/api/openapi.yaml").read_text(encoding="utf-8")
-    )
-    return doc
-
-
-def openapi_validator(pointer: str) -> Draft202012Validator:
-    """A validator for the schema at a JSON pointer inside openapi.yaml, refs resolved."""
-    resource = Resource.from_contents(_openapi(), default_specification=DRAFT202012)
-    registry: Registry[object] = Registry().with_resource(OPENAPI_URI, resource)
-    return Draft202012Validator({"$ref": f"{OPENAPI_URI}#{pointer}"}, registry=registry)
 
 
 def _examples() -> list[tuple[str, str, object]]:

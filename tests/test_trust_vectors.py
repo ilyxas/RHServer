@@ -139,8 +139,9 @@ def test_signed_request(v: dict[str, Any]) -> None:
 
 def test_signed_requests_cover_every_request_error_code() -> None:
     covered = {v["expect"].get("code") for v in SIGNED["vectors"]}
-    # peer_mismatch (whois) and pair_rejected (terminal "n") are not decided by signatures.
-    assert set(ERROR_STATUS) - {"peer_mismatch", "pair_rejected"} <= covered
+    # peer_mismatch (whois), pair_rejected (terminal "n") and bad_request (the body of an
+    # operation) are not decided by signatures.
+    assert set(ERROR_STATUS) - {"peer_mismatch", "pair_rejected", "bad_request"} <= covered
 
 
 SERVER = load("server_sig.json")

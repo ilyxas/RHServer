@@ -16,14 +16,15 @@ from rh_common.protocol import format_ts
 from rh_core.app import Core, create_app
 from rh_core.config import DEV_HOST, DEV_PORT, Config
 from rh_core.peers import LocalPeers, PeerLookup, TailscaleWhois
+from rh_core.system import SystemProbe
 
 Job = Callable[[Core], Awaitable[None]]
 
 
-def build_core(config: Config) -> Core:
+def build_core(config: Config, *, probe: SystemProbe | None = None) -> Core:
     config.validate()
     peers: PeerLookup = TailscaleWhois(config.tailscale) if config.whois else LocalPeers()
-    return Core(config, peers=peers)
+    return Core(config, peers=peers, probe=probe)
 
 
 def auto_pair(announce: Callable[[str], None], pairing_file: Path | None) -> Job:
@@ -100,10 +101,15 @@ def _bind(port: int) -> socket.socket:
 
 
 def run(
-    config: Config, *, background: list[Job] | None = None, sock: socket.socket | None = None
+    config: Config,
+    *,
+    background: list[Job] | None = None,
+    sock: socket.socket | None = None,
+    probe: SystemProbe | None = None,
 ) -> None:
-    """Serve until stopped; `sock` is an already bound socket (dev mode)."""
-    core = build_core(config)
+    """Serve until stopped; `sock` is an already bound socket (dev mode), `probe` a
+    fake system (dev fixtures)."""
+    core = build_core(config, probe=probe)
     server: uvicorn.Server
 
     def after_bind(job: Job) -> Job:
