@@ -87,7 +87,7 @@ def keyset_b64(prefix: str) -> dict[str, str]:
 
 
 DEVICES = {
-    "A": ("iPhone Ильи", "active"),
+    "A": ("Мой iPhone", "active"),
     "B": ("iPad", "active"),
     "R": ("Old iPhone", "revoked"),
 }
@@ -340,7 +340,7 @@ def _pair(
     signed_body: bytes | None = None,
     drop_critical: bool = False,
 ) -> tuple[dict[str, str], bytes]:
-    doc: dict[str, Any] = {"name": "iPhone Ильи", "keys": keyset_b64(p)}
+    doc: dict[str, Any] = {"name": "Мой iPhone", "keys": keyset_b64(p)}
     if replaces:
         doc["replaces"] = replaces
     body = json.dumps(doc, ensure_ascii=False).encode()
@@ -580,9 +580,7 @@ def server_sig_vectors() -> dict[str, Any]:
     unauthorized = json.dumps(
         {"error": {"code": "nonce_used", "message": "nonce was already used"}}
     ).encode()
-    paired = json.dumps(
-        {"device_id": dev_id("P"), "mac_name": "ilyas-MacBook-Air", "ssh_host_keys": []}
-    ).encode()
+    paired = json.dumps({"device_id": dev_id("P"), "mac_name": "Mac", "ssh_host_keys": []}).encode()
 
     def sig(n: str, status: int, body: bytes, signer: str = "core") -> bytes:
         return sign(signer, server_sig_message(nonce=n, status=status, body=body))
@@ -675,7 +673,7 @@ def pairing_vectors() -> dict[str, Any]:
 
     base = {
         "v": 1,
-        "url": "https://ilyas-macbook-air.tail1234.ts.net:8443",
+        "url": "https://mac.tail1234.ts.net:8443",
         "core_key": core,
         "code": code,
         "exp": exp,
@@ -691,7 +689,7 @@ def pairing_vectors() -> dict[str, Any]:
         ("wrong-prefix", "rhpairing:" + valid[0][1][len("rhpair:") :]),
         ("padded-base64url", valid[0][1] + "="),
         ("standard-base64-alphabet", "rhpair:+" + valid[0][1][8:]),
-        ("http-not-local", raw({**base, "url": "http://ilyas-macbook-air.tail1234.ts.net:8787"})),
+        ("http-not-local", raw({**base, "url": "http://mac.tail1234.ts.net:8787"})),
         ("url-with-path", raw({**base, "url": base["url"] + "/v1"})),
         ("missing-exp", raw({k: v for k, v in base.items() if k != "exp"})),
         ("extra-field", raw({**base, "name": "mac"})),

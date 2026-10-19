@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Everything a PR must pass. Run on the cloud container and on Илья's Mac;
+# Everything a PR must pass. Run on the cloud container and on the owner's Mac;
 # the Mac output goes into the PR description.
 set -euo pipefail
 cd "$(dirname "$0")/.."

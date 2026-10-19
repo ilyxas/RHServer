@@ -103,9 +103,9 @@ def prod(**kw: object) -> Config:
     return from_dict({k: v for k, v in doc.items() if v is not None})
 
 
-def test_dev_config_is_valid_for_ilya(tmp_path: Path) -> None:
+def test_dev_config_is_valid_for_owner(tmp_path: Path) -> None:
     cfg = dev_config(tmp_path)
-    cfg.validate(user="ilya")
+    cfg.validate(user="owner")
     assert cfg.public_url == "http://127.0.0.1:8787"
 
 
@@ -124,9 +124,9 @@ def test_dev_mode_refused_for_core_user(tmp_path: Path) -> None:
     ],
 )
 def test_production_cannot_be_loosened(change: dict[str, object], message: str) -> None:
-    prod().validate(user="ilya")
+    prod().validate(user="owner")
     with pytest.raises(ConfigError, match=message):
-        prod(**change).validate(user="ilya")
+        prod(**change).validate(user="owner")
 
 
 @pytest.mark.parametrize(
@@ -139,7 +139,7 @@ def test_production_cannot_be_loosened(change: dict[str, object], message: str) 
 )
 def test_dev_cannot_be_exposed(doc: dict[str, object]) -> None:
     with pytest.raises(ConfigError):
-        from_dict(doc).validate(user="ilya")
+        from_dict(doc).validate(user="owner")
 
 
 def test_config_rejects_unknown_keys_and_modes() -> None:
@@ -156,7 +156,7 @@ def test_config_toml_round_trip(tmp_path: Path) -> None:
         journal_dir=tmp_path / "Hst" / "RemoteHands",
         host="mac.tail1234.ts.net",
         port=8443,
-        mac_name="MacBook Ильи",
+        mac_name="Мой Mac",
         tls_cert=tmp_path / "c.crt",
         tls_key=tmp_path / "c.key",
         tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -211,7 +211,7 @@ def test_core_key_created_private(tmp_path: Path) -> None:
 
 WHOIS = {
     "Node": {"ID": 123, "StableID": "nABCDEF1CNTRL", "Name": "iphone.tail1234.ts.net."},
-    "UserProfile": {"LoginName": "ilya@example.com"},
+    "UserProfile": {"LoginName": "owner@example.com"},
 }
 
 

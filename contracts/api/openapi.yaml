@@ -58,7 +58,7 @@ servers:
     variables:
       host:
         default: mac.tailnet.ts.net
-        description: MagicDNS name of Илья's Mac
+        description: MagicDNS name of the owner's Mac
   - url: http://127.0.0.1:8787
     description: Dev mode (config only, never in a production install)
 paths:
@@ -104,7 +104,7 @@ paths:
         The signed object has op "pair", key "normal", nonce = the pairing code and
         device = device_id(keys.normal). It is signed twice: X-RH-Sig with the
         normal key and X-RH-Sig-Critical with the critical key. There is no
-        challenge. The request stays open until Илья answers y/n in the terminal
+        challenge. The request stays open until the owner answers y/n in the terminal
         or the code expires (≤ 5 minutes): set the client timeout to at least 5
         minutes. With `replaces`, the old device is revoked by the same answer.
       x-rh-op: pair
