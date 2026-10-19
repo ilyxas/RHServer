@@ -24,6 +24,7 @@ from rh_common.crypto import b64d
 from rh_common.protocol import decode_pairing_string
 from rh_core.config import DEV_PORT
 from rh_core.journal import verify
+from rh_core.server import dev_socket
 
 
 def free_port() -> int:
@@ -341,3 +342,13 @@ def test_taken_default_port_falls_back_to_a_free_one(short_dir: Path) -> None:
         proc.terminate()
         proc.wait(10)
         holder.close()
+
+
+def test_explicit_port_next_to_a_wildcard_listener_is_taken() -> None:
+    """A listener on 0.0.0.0:N owns 127.0.0.1:N too, even where SO_REUSEADDR
+    would let a second bind succeed (macOS)."""
+    with socket.socket() as other:
+        other.bind(("0.0.0.0", 0))
+        other.listen()
+        with pytest.raises(OSError):
+            dev_socket(other.getsockname()[1])

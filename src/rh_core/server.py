@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import socket
 from collections.abc import Awaitable, Callable
@@ -73,15 +74,21 @@ def dev_socket(port: int | None = None) -> socket.socket:
     """
     if port is not None:
         return _bind(port)
-    try:
-        socket.create_connection((DEV_HOST, DEV_PORT), timeout=0.5).close()
-    except OSError:  # nobody answers: try to take it
-        with contextlib.suppress(OSError):
-            return _bind(DEV_PORT)
+    with contextlib.suppress(OSError):
+        return _bind(DEV_PORT)
     return _bind(0)
 
 
 def _bind(port: int) -> socket.socket:
+    if port:
+        # On macOS SO_REUSEADDR lets 127.0.0.1:N bind next to a 0.0.0.0:N listener;
+        # whoever answers there owns the port.
+        try:
+            socket.create_connection((DEV_HOST, port), timeout=0.5).close()
+        except OSError:
+            pass
+        else:
+            raise OSError(errno.EADDRINUSE, os.strerror(errno.EADDRINUSE))
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
