@@ -1,5 +1,11 @@
 # contracts/ changelog
 
+## Stage 1
+
+- `api/openapi.yaml` 0.1.0: `/v1/challenge`, `/v1/pair`, `/v1/ping`, `/v1/status`, `/v1/devices`, `/v1/devices/revoke`, `/v1/ws`; order of checks, HTTP status per code, pairing string, device id, fingerprint; `X-RH-Sig-Critical`; `x-rh-key: normal+critical` for pair.
+- `api/events.schema.json`: signed frame `{seq, payload, sig}`, payload `{seq, type, data}`, event `hello`. Frame signatures hash the payload text instead of re-canonicalizing data, so event data may contain doubles.
+- New vectors: `ecdsa.json`, `request_build.json`, `signed_requests.json`, `server_sig.json`, `pairing.json`, `ws_frames.json`.
+
 ## Stage 0
 
 - `README.md`: layout, vector format, how the RHClient copy is verified, how contracts change.

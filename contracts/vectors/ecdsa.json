@@ -1,0 +1,69 @@
+{
+  "description": "ECDSA P-256 / SHA-256, DER signatures over message bytes. High-S signatures are valid (Security.framework may emit either form).",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "valid",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEUCIQDU3z/pa+Qzdk+N5xl2zvrhTbi8ngfVBCsxJRDI6fGcggIgXUhhmv/NdsQq0MIkZLdcVJCcV8o3wGQWqS9ZCVex0RU=",
+      "valid": true
+    },
+    {
+      "name": "valid-low-s",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEUCIQDU3z/pa+Qzdk+N5xl2zvrhTbi8ngfVBCsxJRDI6fGcggIgXUhhmv/NdsQq0MIkZLdcVJCcV8o3wGQWqS9ZCVex0RU=",
+      "valid": true
+    },
+    {
+      "name": "valid-high-s",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEYCIQDU3z/pa+Qzdk+N5xl2zvrhTbi8ngfVBCsxJRDI6fGcggIhAKK3nmQAMok81S8925tIo6ssSqLjb1c6bkqKcbmksVQ8",
+      "valid": true
+    },
+    {
+      "name": "message-changed",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwb25nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEUCIQDU3z/pa+Qzdk+N5xl2zvrhTbi8ngfVBCsxJRDI6fGcggIgXUhhmv/NdsQq0MIkZLdcVJCcV8o3wGQWqS9ZCVex0RU=",
+      "valid": false
+    },
+    {
+      "name": "other-key",
+      "pub_x963_b64": "BCd+hdMlvcfP0qOX4tzz3o/1D0D7DSgBraVGFE0xxuu6aVayPC60rdV5fvFg1/liV55LvMvZf2ki/m9fURsxve4=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEUCIQDU3z/pa+Qzdk+N5xl2zvrhTbi8ngfVBCsxJRDI6fGcggIgXUhhmv/NdsQq0MIkZLdcVJCcV8o3wGQWqS9ZCVex0RU=",
+      "valid": false
+    },
+    {
+      "name": "der-truncated",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEUCIQDU3z/pa+Qzdk+N5xl2zvrhTbi8ngfVBCsxJRDI6fGcggIgXUhhmv/NdsQq0MIkZLdcVJCcV8o3wGQWqS9ZCVex0Q==",
+      "valid": false
+    },
+    {
+      "name": "der-empty",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "",
+      "valid": false
+    },
+    {
+      "name": "r-s-swapped",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "MEUCIF1IYZr/zXbEKtDCJGS3XFSQnFfKN8BkFqkvWQlXsdEVAiEA1N8/6WvkM3ZPjecZds764U24vJ4H1QQrMSUQyOnxnII=",
+      "valid": false
+    },
+    {
+      "name": "raw-r-s-not-der",
+      "pub_x963_b64": "BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=",
+      "message_b64": "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+      "sig_der_b64": "1N8/6WvkM3ZPjecZds764U24vJ4H1QQrMSUQyOnxnIJdSGGa/812xCrQwiRkt1xUkJxXyjfAZBapL1kJV7HRFQ==",
+      "valid": false
+    }
+  ]
+}
