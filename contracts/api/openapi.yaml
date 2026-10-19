@@ -410,10 +410,12 @@ paths:
           errors     kind error: rejected requests, rejected pairing, failures
 
         Kind system (core started / stopped and the like) shows only under all.
-        Accepted requests stay in the journal file but are not in the feed: reads
-        (ping, status, devices.list, data.get, log.list, quick.list, ws.open,
-        challenge) are noise, and for a command the feed shows its effect instead
-        of the request (one entry "Revoked Мой iPhone", not two).
+        Accepted requests stay in the journal file but are not in the feed by
+        default: reads (ping, status, devices.list, data.get, log.list,
+        quick.list, ws.open) are noise, and for a command the feed shows its
+        effect instead of the request (one entry "Revoked Мой iPhone", not two).
+        With include_reads: true they are in the feed too, as kind system
+        (title "Accepted <op>"), under filter all.
 
         `query` is a case-insensitive substring match over title, detail, event,
         op and device. `before` is the `next` value of the previous page; pages
@@ -432,6 +434,7 @@ paths:
                 query: {type: string, maxLength: 200}
                 before: {type: string, description: Opaque cursor from `next`}
                 limit: {type: integer, minimum: 1, maximum: 200, default: 50}
+                include_reads: {type: boolean, default: false, description: Also list accepted requests (kind system)}
             example: {filter: errors, query: ping, limit: 50}
       responses:
         "200":
