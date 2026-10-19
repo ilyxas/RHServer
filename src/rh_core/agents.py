@@ -6,17 +6,17 @@ The team is the bullet list under the heading that starts with "Команда"
     - **Agent-Id** — role.
 
 The file is read on every call, so edits show up without restarting the core.
-How a status is found from processes is the owner's decision ([утвердить],
-SPEC §5.4, §11); until the rules exist every member is "unknown".
+How a status is found from processes is the owner's decision (SPEC §5.4, §11):
+rh_core.agent_rules, configured per agent; a member without a rule is "unknown".
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 AgentState = Literal["working", "idle", "monitoring", "stopped", "unknown"]
 STATES: tuple[AgentState, ...] = ("working", "idle", "monitoring", "stopped", "unknown")
@@ -53,11 +53,13 @@ def parse_team(text: str, heading: str = DEFAULT_HEADING) -> list[Member]:
     return members
 
 
-StatusRule = Callable[[Member], AgentState]
+class StatusRules(Protocol):
+    def evaluate(self, members: list[Member]) -> dict[str, AgentState]: ...
 
 
-def _unknown(member: Member) -> AgentState:
-    return "unknown"
+class NoRules:
+    def evaluate(self, members: list[Member]) -> dict[str, AgentState]:
+        return {m.id: "unknown" for m in members}
 
 
 class Team:
@@ -67,12 +69,12 @@ class Team:
         *,
         skip: Iterable[str] = (),
         heading: str = DEFAULT_HEADING,
-        rule: StatusRule = _unknown,
+        rules: StatusRules | None = None,
     ) -> None:
         self.team_file = team_file
         self.skip = frozenset(skip)
         self.heading = heading
-        self.rule = rule
+        self.rules: StatusRules = rules or NoRules()
 
     def members(self) -> list[Member]:
         if self.team_file is None:
@@ -82,9 +84,11 @@ class Team:
 
     def rows(self) -> list[dict[str, object]]:
         """Value of agents.status (type rows)."""
+        members = self.members()
+        states = self.rules.evaluate(members)
         out: list[dict[str, object]] = []
-        for m in self.members():
-            state = self.rule(m)
+        for m in members:
+            state = states.get(m.id, "unknown")
             row: dict[str, object] = {
                 "id": m.id,
                 "title": m.id,

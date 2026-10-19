@@ -86,16 +86,29 @@ def test_team_rows_skip_and_unknown_until_rules(tmp_path: Path) -> None:
     assert "subtitle" not in rows[2]
 
 
+class FixedRules:
+    def __init__(self, states: dict[str, str]) -> None:
+        self.states = states
+
+    def evaluate(self, members: list[Member]) -> dict[str, Any]:
+        return {m.id: self.states[m.id] for m in members if m.id in self.states}
+
+
 def test_team_rows_map_states(tmp_path: Path) -> None:
     team_file = tmp_path / "CLAUDE.md"
     team_file.write_text(TEAM_TEXT, encoding="utf-8")
-    states = {"Owner": "working", "Friend": "monitoring", "Agent-Alpha": "idle"}
-    team = Team(team_file, rule=lambda m: states.get(m.id, "stopped"))  # type: ignore[arg-type,return-value]
-    got = {r["id"]: r["status"] for r in team.rows()}
+    states = {
+        "Owner": "working",
+        "Friend": "monitoring",
+        "Agent-Alpha": "idle",
+        "Agent-Beta": "stopped",
+    }
+    got = {r["id"]: r["status"] for r in Team(team_file, rules=FixedRules(states)).rows()}
     assert got["Owner"] == {"state": "ok", "text": "working"}
     assert got["Friend"] == {"state": "ok", "text": "monitoring"}
     assert got["Agent-Alpha"] == {"state": "off", "text": "idle"}
     assert got["Agent-Beta"] == {"state": "off", "text": "stopped"}
+    assert got["Agent-Gamma"] == {"state": "off", "text": "unknown"}  # no state from the rules
 
 
 def test_no_team_file_means_no_rows() -> None:
