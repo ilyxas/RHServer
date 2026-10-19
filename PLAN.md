@@ -130,7 +130,7 @@ contracts/
 ## Этап 0. Каркас
 
 **Задачи**
-1. `pyproject.toml` (Python ≥ 3.12, uv), пакеты `rh_common`, `rh_core`, `rh_agent`, `rh_cli`; entry points `rhcore`, `rhpage`, `rh-agent` (пока заглушки с `--version`).
+1. `pyproject.toml` (Python ≥ 3.12, uv; на Mac Ильи в PATH только системный Python 3.9.6 — uv сам ставит управляемый Python 3.12 через `.python-version`, без sudo и без brew; установка uv — один шаг в инструкции Илье), пакеты `rh_common`, `rh_core`, `rh_agent`, `rh_cli`; entry points `rhcore`, `rhpage`, `rh-agent` (пока заглушки с `--version`).
 2. `CLAUDE.md` для агентов-разработчиков RHServer: правила SPEC §10 и PROCESS (без sudo, без деплоя, [проверить] → `docs/decisions/`, `contracts/` только через ревью iOS, формат PR).
 3. `contracts/`: `README.md`, `CHANGELOG.md`, `MANIFEST.sha256` + `scripts/contracts_manifest.py`, скелет `api/openapi.yaml` (info, servers, общие схемы `Error`, описание схемы подписи, `x-rh-op`/`x-rh-key`), `vectors/jcs.json`.
 4. `rh_common/jcs.py` — RFC 8785; генератор векторов `scripts/gen_vectors.py` (векторы воспроизводимы, генератор — в репо).
@@ -301,7 +301,7 @@ contracts/
 ## Этап 7. Развёртывание
 
 **Задачи**
-1. `deploy/install_core.sh` (запускает только Илья, с sudo): создание пользователя `_rhcore`, каталогов кода и данных, копирование кода ядра, LaunchDaemon plist, права, журнал `~/Hst/RemoteHands/` (или запасной путь), сертификат Tailscale, сокет для rh-agent.
+1. `deploy/install_core.sh` (запускает только Илья, с sudo): создание пользователя `_rhcore`, отдельный Python 3.12 и зависимости в каталоге кода ядра (управляемый Python из домашней папки Ильи для `_rhcore` не годится), каталогов кода и данных, копирование кода ядра, LaunchDaemon plist, права, журнал `~/Hst/RemoteHands/` (или запасной путь), сертификат Tailscale, сокет для rh-agent.
 2. LaunchAgent для rh-agent от пользователя Ильи.
 3. `deploy/INSTALL.md` — полная пошаговая инструкция, проверка после установки, откат, обновление ядра.
 4. Перенос данных dev → prod не делаем: ядро ставится чисто, повторный pairing.
