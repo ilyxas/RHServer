@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50.0.2",
+    "psutil>=7.2.2",
     "segno>=1.6.6",
     "starlette>=1.9.0",
     "uvicorn[standard]>=0.54.0",
@@ -28,6 +29,7 @@ dev = [
     "types-pyyaml",
     "jsonschema>=4.26.0",
     "httpx>=0.28.1",
+    "types-psutil>=7.2.2.20260906",
 ]
 
 [build-system]

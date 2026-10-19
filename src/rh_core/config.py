@@ -21,6 +21,7 @@ DEV_HOST = "127.0.0.1"
 DEV_PORT = 8787
 PRODUCTION_PORT = 8443
 CORE_USER = "_rhcore"
+TEAM_FILE = Path("~/Friend/CLAUDE.md").expanduser()
 
 
 class ConfigError(ValueError):
@@ -39,6 +40,8 @@ class Config:
     tls_key: Path | None = None
     whois: bool = True
     tailscale: str | None = None  # path to the tailscale CLI; found automatically if unset
+    team_file: Path | None = TEAM_FILE  # agents.status; None: no team
+    team_skip: tuple[str, ...] = ()  # team ids that are not agents (the owner)
 
     @property
     def db_path(self) -> Path:
@@ -101,6 +104,7 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
         "tls_key",
         "whois",
         "tailscale",
+        "agents",
     }
     unknown = set(doc) - known
     if unknown:
@@ -133,10 +137,31 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
         kwargs["tailscale"] = str(doc["tailscale"])
     if "mac_name" in doc:
         kwargs["mac_name"] = str(doc["mac_name"])
+    kwargs.update(_agents(doc.get("agents", {}), base))
     return Config(**kwargs)
 
 
-def dev_config(data_dir: Path, *, port: int = DEV_PORT) -> Config:
+def _agents(table: Any, base: Path) -> dict[str, Any]:
+    """[agents]: team_file (path or "" for no team), skip (ids that are not agents)."""
+    if not isinstance(table, dict):
+        raise ConfigError("[agents] must be a table")
+    unknown = set(table) - {"team_file", "skip"}
+    if unknown:
+        raise ConfigError(f"unknown [agents] keys: {sorted(unknown)}")
+    out: dict[str, Any] = {}
+    if "team_file" in table:
+        value = str(table["team_file"])
+        p = Path(value).expanduser()
+        out["team_file"] = None if not value else (p if p.is_absolute() else base / p)
+    skip = table.get("skip", [])
+    if not isinstance(skip, list) or not all(isinstance(s, str) for s in skip):
+        raise ConfigError("[agents] skip must be a list of strings")
+    out["team_skip"] = tuple(skip)
+    return out
+
+
+def dev_config(data_dir: Path, *, port: int = DEV_PORT, team_file: Path | None = None) -> Config:
+    """Dev core: no team unless one is given (UI tests use tests/fixtures/stage2/team.md)."""
     return Config(
         mode="dev",
         data_dir=data_dir,
@@ -144,6 +169,7 @@ def dev_config(data_dir: Path, *, port: int = DEV_PORT) -> Config:
         host=DEV_HOST,
         port=port,
         whois=False,
+        team_file=team_file,
     )
 
 
@@ -166,4 +192,6 @@ def to_toml(cfg: Config) -> str:
         value = getattr(cfg, name)
         if value:
             lines.append(f"{name} = {q(value)}")
+    lines += ["", "[agents]", f"team_file = {q(cfg.team_file or '')}"]
+    lines.append(f"skip = [{', '.join(q(s) for s in cfg.team_skip)}]")
     return "\n".join(lines) + "\n"
