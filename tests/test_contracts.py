@@ -121,6 +121,12 @@ def test_data_value_shapes() -> None:
         {"status": "active", "type": "number", "value": 1.5, "unit": "%", "at": at},
         {"status": "active", "type": "status", "value": {"state": "off"}, "at": at},
         {"status": "active", "type": "rows", "value": [{"id": "a", "title": "A"}], "at": at},
+        {
+            "status": "active",
+            "type": "rows",
+            "value": [{"id": "a", "title": "A", "at": at}],
+            "at": at,
+        },
         {"status": "active", "type": "bool", "value": True, "at": at},
         {"status": "pending"},
         {"status": "error", "message": "provider failed"},
@@ -130,6 +136,12 @@ def test_data_value_shapes() -> None:
         {"status": "active", "type": "text", "value": "x", "unit": "%", "at": at},
         {"status": "active", "type": "status", "value": {"state": "maybe"}, "at": at},
         {"status": "active", "type": "rows", "value": [{"id": "a"}], "at": at},
+        {
+            "status": "active",
+            "type": "rows",
+            "value": [{"id": "a", "title": "A", "at": "now"}],
+            "at": at,
+        },
         {"status": "pending", "value": 1},
         {"status": "error"},
     ]

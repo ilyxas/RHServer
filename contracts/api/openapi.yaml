@@ -326,8 +326,9 @@ paths:
                                   row id = approval_id (always [] until stage 4)
           rh.questions   rows     questions of the agent waiting for an answer in
                                   Chat (always [] until stage 3)
-          rh.activity    rows     the newest log.list entries of filter "all";
-                                  row id = log entry id, subtitle = entry detail
+          rh.activity    rows     the 10 newest log.list entries of filter "all"
+                                  (Home "Last Activity"): row id = log entry id,
+                                  title, subtitle = detail, at = entry ts
           agents.status  rows     the team from ~/Friend/CLAUDE.md, in file order:
                                   id and title = agent id, subtitle = its role,
                                   status.text = working | idle | monitoring |
@@ -417,7 +418,6 @@ paths:
         `query` is a case-insensitive substring match over title, detail, event,
         op and device. `before` is the `next` value of the previous page; pages
         do not shift when new entries arrive. Pull-to-refresh omits `before`.
-        Home "Last Activity" is this call with {"limit": 5}.
       x-rh-op: log.list
       x-rh-key: normal
       requestBody:
@@ -543,7 +543,8 @@ components:
         title: {type: string}
         subtitle: {type: string}
         status: {$ref: "#/components/schemas/StatusValue"}
-      description: One element of a value of type rows (SPEC §7.3)
+        at: {$ref: "#/components/schemas/Timestamp", description: "When the row's event happened, if it has one"}
+      description: One element of a value of type rows (SPEC §7.3, plus optional at)
     DataResult:
       oneOf:
         - $ref: "#/components/schemas/DataActive"
