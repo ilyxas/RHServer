@@ -246,8 +246,8 @@ def test_whois_missing_binary() -> None:
 # --- pairing session -----------------------------------------------------------------------
 
 
-def make_candidate(code: str) -> Candidate:
-    phone = Phone()
+def make_candidate(code: str, phone: Phone | None = None) -> Candidate:
+    phone = phone or Phone()
     obj = SignedObject(device=phone.id, key="normal", nonce=code, ts="", exp="", op="pair", body="")
     req = PairRequest(obj=obj, name=phone.name, keys={}, keys_b64=phone.pub, replaces=None)
     return Candidate(request=req, fingerprint=fingerprint(phone.pub), peer="local")
@@ -258,7 +258,8 @@ def test_withdrawn_request_frees_the_code() -> None:
     session = pairing.open(PairCode(code="c", expires=T0 + timedelta(minutes=5)))
     first = make_candidate("c")
     assert pairing.submit(first) is session
-    assert pairing.find_code("c") == PairCode(code="c", expires=session.code.expires, used=True)
+    # Waiting for y/n does not use the code up; a retry with the same keys may take over.
+    assert pairing.find_code("c") == PairCode(code="c", expires=session.code.expires, used=False)
     assert pairing.withdraw(session, first) is True
     assert first.withdrawn and first.decided.is_set() and not first.accepted
     assert session.candidate is None and not session.arrived.is_set() and not session.closed
@@ -270,6 +271,29 @@ def test_withdrawn_request_frees_the_code() -> None:
     assert pairing.submit(second) is session
     pairing.decide(session, True, second)
     assert second.accepted and pairing.withdraw(session, second) is False
+
+
+def test_retry_with_the_same_keys_takes_over_a_waiting_request() -> None:
+    pairing = Pairing(url="http://127.0.0.1:8787", core_key_b64="", clock=lambda: T0)
+    session = pairing.open(PairCode(code="c", expires=T0 + timedelta(minutes=5)))
+    phone = Phone()
+    first = make_candidate("c", phone)
+    assert pairing.submit(first) is session
+    # Other keys while the first request waits: the code is busy.
+    assert pairing.submit(make_candidate("c")) is None
+    assert session.candidate is first and not first.decided.is_set()
+    # The same keys again: the first request is withdrawn, the retry waits in its place.
+    retry = make_candidate("c", phone)
+    assert pairing.submit(retry) is session
+    assert first.withdrawn and first.decided.is_set() and not first.accepted
+    assert session.candidate is retry and session.arrived.is_set()
+    pairing.decide(session, True, first)  # a late answer to the replaced request
+    assert not retry.decided.is_set() and session.used is False
+    pairing.decide(session, True, retry)
+    assert retry.accepted
+    # Once answered, the code is used: even the same keys cannot take over.
+    assert pairing.find_code("c") == PairCode(code="c", expires=session.code.expires, used=True)
+    assert pairing.submit(make_candidate("c", phone)) is None
 
 
 def test_answer_must_name_the_shown_fingerprint() -> None:

@@ -70,18 +70,30 @@ class Pairing:
             s = self._session
             if s is None or s.closed or s.code.code != code:
                 return None
-            return PairCode(
-                code=s.code.code, expires=s.code.expires, used=s.used or s.candidate is not None
-            )
+            # A request still waiting for y/n does not use the code up: a retry with the
+            # same keys may take its place (see submit).
+            busy = s.candidate is not None and s.candidate.decided.is_set()
+            return PairCode(code=s.code.code, expires=s.code.expires, used=s.used or busy)
 
     def submit(self, candidate: Candidate) -> Session | None:
-        """Attach a verified request to the open session; None if it is gone or busy."""
+        """Attach a verified request to the open session; None if it is gone or busy.
+
+        A request with the same fingerprint as the one waiting for y/n replaces it:
+        the phone lost the first connection without the core noticing and retried.
+        The replaced request ends as withdrawn, the terminal is asked again.
+        """
         with self._lock:
             s = self._session
-            if s is None or s.closed or s.used or s.candidate is not None:
+            if s is None or s.closed or s.used:
                 return None
             if s.code.code != candidate.request.obj.nonce:
                 return None
+            old = s.candidate
+            if old is not None:
+                if old.decided.is_set() or old.fingerprint != candidate.fingerprint:
+                    return None
+                old.withdrawn = True
+                old.decided.set()
             s.candidate = candidate
             if self.auto_accept:
                 candidate.accepted = True

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -35,7 +36,10 @@ def auto_pair(announce: Callable[[str], None], pairing_file: Path | None) -> Job
         while True:
             session = core.pairing.start()
             if pairing_file is not None:
-                pairing_file.write_text(session.string + "\n", encoding="utf-8")
+                # Readers (UI tests) must never see a half-written file.
+                tmp = pairing_file.with_name(pairing_file.name + ".tmp")
+                tmp.write_text(session.string + "\n", encoding="utf-8")
+                os.replace(tmp, pairing_file)
             announce(f"pairing (до {format_ts(session.code.expires)}): {session.string}")
             done = await anyio.to_thread.run_sync(
                 session.done.wait, core.pairing.seconds_left(session), abandon_on_cancel=True
