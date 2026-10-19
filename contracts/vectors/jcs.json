@@ -1,0 +1,402 @@
+{
+  "description": "RFC 8785 canonical JSON. input is raw JSON text; expected is the canonical text, expected_hex its UTF-8 bytes. Vectors with expect_error=true must be rejected. scope=protocol is required on both sides; scope=full on the server.",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "empty-object",
+      "scope": "protocol",
+      "input": "{}",
+      "expected": "{}",
+      "expected_hex": "7b7d",
+      "expected_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty-array",
+      "scope": "protocol",
+      "input": "[]",
+      "expected": "[]",
+      "expected_hex": "5b5d",
+      "expected_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "literals",
+      "scope": "protocol",
+      "input": "[null, true, false]",
+      "expected": "[null,true,false]",
+      "expected_hex": "5b6e756c6c2c747275652c66616c73655d",
+      "expected_sha256": "37257214f22b92121c5ff4d7e29ed2d31b3f1129ee698e96e581ec05cb2e3cf7"
+    },
+    {
+      "name": "whitespace-removed",
+      "scope": "protocol",
+      "input": " { \"b\" : 1 ,\n\t\"a\" : [ 1 , 2 ] } ",
+      "expected": "{\"a\":[1,2],\"b\":1}",
+      "expected_hex": "7b2261223a5b312c325d2c2262223a317d",
+      "expected_sha256": "94a786c3662bc7beeb598efa7d8cb58d7bea25d6c275ea9785a0230ff1f8c2ba"
+    },
+    {
+      "name": "key-order-ascii",
+      "scope": "protocol",
+      "input": "{\"b\":2,\"a\":1,\"c\":3,\"A\":0,\"_\":4,\"1\":5}",
+      "expected": "{\"1\":5,\"A\":0,\"_\":4,\"a\":1,\"b\":2,\"c\":3}",
+      "expected_hex": "7b2231223a352c2241223a302c225f223a342c2261223a312c2262223a322c2263223a337d",
+      "expected_sha256": "506fec3285e5283916f66df654bc33e0d45c82858af7fcd79db96cc8934c13c3"
+    },
+    {
+      "name": "key-order-prefix",
+      "scope": "protocol",
+      "input": "{\"ab\":1,\"a\":2,\"abc\":3,\"\":4}",
+      "expected": "{\"\":4,\"a\":2,\"ab\":1,\"abc\":3}",
+      "expected_hex": "7b22223a342c2261223a322c226162223a312c22616263223a337d",
+      "expected_sha256": "c0e051538c71da584d1a20143689ac8785b26c3bd150e8b5c1844f631e2683a4"
+    },
+    {
+      "name": "key-order-utf16-rfc8785",
+      "scope": "protocol",
+      "input": "{\"\\u20ac\":\"Euro Sign\",\"\\r\":\"Carriage Return\",\"\\ufb33\":\"Hebrew Letter Dalet With Dagesh\",\"1\":\"One\",\"\\ud83d\\ude00\":\"Emoji: Grinning Face\",\"\\u0080\":\"Control\",\"\\u00f6\":\"Latin Small Letter O With Diaeresis\"}",
+      "expected": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\":\"Control\",\"ö\":\"Latin Small Letter O With Diaeresis\",\"€\":\"Euro Sign\",\"😀\":\"Emoji: Grinning Face\",\"דּ\":\"Hebrew Letter Dalet With Dagesh\"}",
+      "expected_hex": "7b225c72223a2243617272696167652052657475726e222c2231223a224f6e65222c22c280223a22436f6e74726f6c222c22c3b6223a224c6174696e20536d616c6c204c6574746572204f205769746820446961657265736973222c22e282ac223a224575726f205369676e222c22f09f9880223a22456d6f6a693a204772696e6e696e672046616365222c22efacb3223a22486562726577204c65747465722044616c6574205769746820446167657368227d",
+      "expected_sha256": "5e321556d22018a9656991a9e94f77ec175fa193e52a2429d312f8419ec8b08c"
+    },
+    {
+      "name": "key-order-emoji-vs-bmp",
+      "scope": "protocol",
+      "input": "{\"\\uffff\":1,\"\\ud83d\\ude00\":2,\"\\ue000\":3}",
+      "expected": "{\"😀\":2,\"\":3,\"￿\":1}",
+      "expected_hex": "7b22f09f9880223a322c22ee8080223a332c22efbfbf223a317d",
+      "expected_sha256": "b1431810e3f4b54d4d871678e248ae11e9e03d0c47085ed8604ed6296a8d3ded"
+    },
+    {
+      "name": "nested-objects-sorted",
+      "scope": "protocol",
+      "input": "{\"z\":{\"b\":1,\"a\":{\"d\":2,\"c\":3}},\"y\":[{\"b\":1,\"a\":2}]}",
+      "expected": "{\"y\":[{\"a\":2,\"b\":1}],\"z\":{\"a\":{\"c\":3,\"d\":2},\"b\":1}}",
+      "expected_hex": "7b2279223a5b7b2261223a322c2262223a317d5d2c227a223a7b2261223a7b2263223a332c2264223a327d2c2262223a317d7d",
+      "expected_sha256": "7e14b26cd37bd0d3844e4b4ee3f82a9dc92f3491db5d188ed2eec87fb2b9203d"
+    },
+    {
+      "name": "array-order-kept",
+      "scope": "protocol",
+      "input": "[\"b\",\"a\",3,1,[2,1]]",
+      "expected": "[\"b\",\"a\",3,1,[2,1]]",
+      "expected_hex": "5b2262222c2261222c332c312c5b322c315d5d",
+      "expected_sha256": "ec1a34c9ec6c91b9fe7045f30f1b23d84a8fcb7d1632dc7962b525eb44f8ed05"
+    },
+    {
+      "name": "string-escapes",
+      "scope": "protocol",
+      "input": "\"quote\\\" backslash\\\\ slash\\/ tab\\t nl\\n cr\\r bs\\b ff\\f\"",
+      "expected": "\"quote\\\" backslash\\\\ slash/ tab\\t nl\\n cr\\r bs\\b ff\\f\"",
+      "expected_hex": "2271756f74655c22206261636b736c6173685c5c20736c6173682f207461625c74206e6c5c6e2063725c722062735c622066665c6622",
+      "expected_sha256": "f4acd01fddb9b406bc809b563752291914ac939dd53bcecba4d7aecfb104603d"
+    },
+    {
+      "name": "string-control-chars",
+      "scope": "protocol",
+      "input": "\"\\u0000\\u0001\\u001f\\u007f\"",
+      "expected": "\"\\u0000\\u0001\\u001f\"",
+      "expected_hex": "225c75303030305c75303030315c75303031667f22",
+      "expected_sha256": "3a5f25746de9e33a0a1d8d04f3bb8e3cc03c04b69fbe67fdbc4091e2b3c48fa8"
+    },
+    {
+      "name": "string-unicode-literal",
+      "scope": "protocol",
+      "input": "\"\\u00e9 \\u0416 \\u4e2d \\ud83d\\ude00 \\u2028\"",
+      "expected": "\"é Ж 中 😀  \"",
+      "expected_hex": "22c3a920d09620e4b8ad20f09f988020e280a822",
+      "expected_sha256": "ee9d3cc06a54aa404fc80deb69bb2e644f4e689e84d5e5ce87b4df9434fa388f"
+    },
+    {
+      "name": "string-utf8-input",
+      "scope": "protocol",
+      "input": "\"Привет, мир — €\"",
+      "expected": "\"Привет, мир — €\"",
+      "expected_hex": "22d09fd180d0b8d0b2d0b5d1822c20d0bcd0b8d18020e2809420e282ac22",
+      "expected_sha256": "bc6e7ec2e6872885aeddf167fb20c99804e5921ac10cc1c12dbe06f759dfc1ae"
+    },
+    {
+      "name": "integers",
+      "scope": "protocol",
+      "input": "[0, 1, -1, 60, 120, 1700000000, 9007199254740991, -9007199254740991]",
+      "expected": "[0,1,-1,60,120,1700000000,9007199254740991,-9007199254740991]",
+      "expected_hex": "5b302c312c2d312c36302c3132302c313730303030303030302c393030373139393235343734303939312c2d393030373139393235343734303939315d",
+      "expected_sha256": "1fe88a7f505ff83f60f5c091bf6130725bcdc7eb1b94b0feb8cb5eed00f77c9c"
+    },
+    {
+      "name": "integer-negative-zero",
+      "scope": "protocol",
+      "input": "-0",
+      "expected": "0",
+      "expected_hex": "30",
+      "expected_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "name": "signing-object",
+      "scope": "protocol",
+      "input": "{\"v\":1,\"device\":\"3f2a9c0d1e4b5a6f7081928374655647\",\"key\":\"normal\",\"nonce\":\"q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=\",\"ts\":\"2026-10-19T12:00:00Z\",\"exp\":\"2026-10-19T12:01:00Z\",\"op\":\"ping\",\"body\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}",
+      "expected": "{\"body\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"device\":\"3f2a9c0d1e4b5a6f7081928374655647\",\"exp\":\"2026-10-19T12:01:00Z\",\"key\":\"normal\",\"nonce\":\"q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=\",\"op\":\"ping\",\"ts\":\"2026-10-19T12:00:00Z\",\"v\":1}",
+      "expected_hex": "7b22626f6479223a2265336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535222c22646576696365223a223366326139633064316534623561366637303831393238333734363535363437222c22657870223a22323032362d31302d31395431323a30313a30305a222c226b6579223a226e6f726d616c222c226e6f6e6365223a2271383376456a5257654a43727a6538534e465a346b4b764e37784930566e695171383376456a5257654a413d222c226f70223a2270696e67222c227473223a22323032362d31302d31395431323a30303a30305a222c2276223a317d",
+      "expected_sha256": "4715298019597d0c3dcf55342eb016e633e10449e4666869f9322a879bc3eb5d"
+    },
+    {
+      "name": "approval-like-object",
+      "scope": "protocol",
+      "input": "{\"what\":\"Удаление каталога\",\"command\":\"rm -rf ~/tmp/build\",\"paths\":[\"/Users/ilya/tmp/build\"],\"urls\":[],\"explain\":\"чистка \\\"кэша\\\"\",\"n\":3}",
+      "expected": "{\"command\":\"rm -rf ~/tmp/build\",\"explain\":\"чистка \\\"кэша\\\"\",\"n\":3,\"paths\":[\"/Users/ilya/tmp/build\"],\"urls\":[],\"what\":\"Удаление каталога\"}",
+      "expected_hex": "7b22636f6d6d616e64223a22726d202d7266207e2f746d702f6275696c64222c226578706c61696e223a22d187d0b8d181d182d0bad0b0205c22d0bad18dd188d0b05c22222c226e223a332c227061746873223a5b222f55736572732f696c79612f746d702f6275696c64225d2c2275726c73223a5b5d2c2277686174223a22d0a3d0b4d0b0d0bbd0b5d0bdd0b8d0b520d0bad0b0d182d0b0d0bbd0bed0b3d0b0227d",
+      "expected_sha256": "d437aeb7f0530ed92b52aec1cfcf1cc23f0237cb176e2a71ca565f5670c9ac6b"
+    },
+    {
+      "name": "rfc8785-example",
+      "scope": "full",
+      "input": "{\"numbers\":[333333333.33333329,1E30,4.50,2e-3,0.000000000000000000000000001],\"string\":\"\\u20ac$\\u000F\\u000aA'\\u0042\\u0022\\u005c\\\\\\\"\\/\",\"literals\":[null,true,false]}",
+      "expected": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}",
+      "expected_hex": "7b226c69746572616c73223a5b6e756c6c2c747275652c66616c73655d2c226e756d62657273223a5b3333333333333333332e333333333333332c31652b33302c342e352c302e3030322c31652d32375d2c22737472696e67223a22e282ac245c75303030665c6e4127425c225c5c5c5c5c222f227d",
+      "expected_sha256": "2d5e01a318d0f0879ab568c4be289c8b1f64ef8921a53c6277d5e069978baacb"
+    },
+    {
+      "name": "number-forms",
+      "scope": "full",
+      "input": "[1.0, 1e0, 10e-1, 100, 1e2, 1E+2, 0.5, -0.0, 1.5e300]",
+      "expected": "[1,1,1,100,100,100,0.5,0,1.5e+300]",
+      "expected_hex": "5b312c312c312c3130302c3130302c3130302c302e352c302c312e35652b3330305d",
+      "expected_sha256": "471f9a895f787e34aa450f4be968a541d75c1803b82d652791c2593b2a382271"
+    },
+    {
+      "name": "integer-beyond-2^53",
+      "scope": "full",
+      "input": "[9007199254740993, 18446744073709551616]",
+      "expected": "[9007199254740992,18446744073709552000]",
+      "expected_hex": "5b393030373139393235343734303939322c31383434363734343037333730393535323030305d",
+      "expected_sha256": "67177f74834ffed718e4575abe53f38345535392ab074f8e5ba0e1ae84de1f5d"
+    },
+    {
+      "name": "rfc8785-number-0000000000000000",
+      "scope": "full",
+      "input": "0.0",
+      "expected": "0",
+      "expected_hex": "30",
+      "expected_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "name": "rfc8785-number-8000000000000000",
+      "scope": "full",
+      "input": "-0.0",
+      "expected": "0",
+      "expected_hex": "30",
+      "expected_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "name": "rfc8785-number-0000000000000001",
+      "scope": "full",
+      "input": "5e-324",
+      "expected": "5e-324",
+      "expected_hex": "35652d333234",
+      "expected_sha256": "c46e7ca1be4c8734f373a56530787288fa2058d73d07855e9247e949f811a42a"
+    },
+    {
+      "name": "rfc8785-number-8000000000000001",
+      "scope": "full",
+      "input": "-5e-324",
+      "expected": "-5e-324",
+      "expected_hex": "2d35652d333234",
+      "expected_sha256": "046f4049d09944fcb2efbf2ddb0ea8f05e0204591d6d02c9106efc88190fa7f9"
+    },
+    {
+      "name": "rfc8785-number-7fefffffffffffff",
+      "scope": "full",
+      "input": "1.7976931348623157e+308",
+      "expected": "1.7976931348623157e+308",
+      "expected_hex": "312e37393736393331333438363233313537652b333038",
+      "expected_sha256": "c2784e1abd6317452708f3fbf9641c16b959561bc621a1d408c23a20aa2cb585"
+    },
+    {
+      "name": "rfc8785-number-ffefffffffffffff",
+      "scope": "full",
+      "input": "-1.7976931348623157e+308",
+      "expected": "-1.7976931348623157e+308",
+      "expected_hex": "2d312e37393736393331333438363233313537652b333038",
+      "expected_sha256": "f0347276b171ff0c36491c912285a2833de7313d1a103a4b1be0274bfe7c021f"
+    },
+    {
+      "name": "rfc8785-number-4340000000000000",
+      "scope": "full",
+      "input": "9007199254740992.0",
+      "expected": "9007199254740992",
+      "expected_hex": "39303037313939323534373430393932",
+      "expected_sha256": "c681da39d7273a6a24c15c9cac3a75526ff2ecf8ba4ee60346a0c70c8163bdb2"
+    },
+    {
+      "name": "rfc8785-number-c340000000000000",
+      "scope": "full",
+      "input": "-9007199254740992.0",
+      "expected": "-9007199254740992",
+      "expected_hex": "2d39303037313939323534373430393932",
+      "expected_sha256": "83e109bfd7fb4984b47a46f363627c18dbbd7e57e36b05a04cd162d304df72e9"
+    },
+    {
+      "name": "rfc8785-number-4430000000000000",
+      "scope": "full",
+      "input": "2.9514790517935283e+20",
+      "expected": "295147905179352830000",
+      "expected_hex": "323935313437393035313739333532383330303030",
+      "expected_sha256": "7933ef1b34c194c7a327ef424e54282dd2872bc7bda27812f9edf7882ca340c0"
+    },
+    {
+      "name": "rfc8785-number-44b52d02c7e14af5",
+      "scope": "full",
+      "input": "9.999999999999997e+22",
+      "expected": "9.999999999999997e+22",
+      "expected_hex": "392e393939393939393939393939393937652b3232",
+      "expected_sha256": "143eadc1fc2fe10a563df313c717399d1835652d710fa189119ff2e1d5cde33d"
+    },
+    {
+      "name": "rfc8785-number-44b52d02c7e14af6",
+      "scope": "full",
+      "input": "1e+23",
+      "expected": "1e+23",
+      "expected_hex": "31652b3233",
+      "expected_sha256": "0b1af6b73e932475817f8eb620deecf21ad7570df3400a23db5c79a9001597f7"
+    },
+    {
+      "name": "rfc8785-number-44b52d02c7e14af7",
+      "scope": "full",
+      "input": "1.0000000000000001e+23",
+      "expected": "1.0000000000000001e+23",
+      "expected_hex": "312e30303030303030303030303030303031652b3233",
+      "expected_sha256": "de7cb5db5ee06bf7ef5b74ebcf94cd9d7efda28125905f7ff590724953173c7b"
+    },
+    {
+      "name": "rfc8785-number-444b1ae4d6e2ef4e",
+      "scope": "full",
+      "input": "9.999999999999997e+20",
+      "expected": "999999999999999700000",
+      "expected_hex": "393939393939393939393939393939373030303030",
+      "expected_sha256": "dcabf7269f6bb6ec5ba8b9530825cd7ffe215d4dd26e0a237f9d753513792c07"
+    },
+    {
+      "name": "rfc8785-number-444b1ae4d6e2ef4f",
+      "scope": "full",
+      "input": "9.999999999999999e+20",
+      "expected": "999999999999999900000",
+      "expected_hex": "393939393939393939393939393939393030303030",
+      "expected_sha256": "914b4f8b4bbe2f6e7c36ad7791fc842a7516d149e694b3a71b78cee465ff6d7a"
+    },
+    {
+      "name": "rfc8785-number-444b1ae4d6e2ef50",
+      "scope": "full",
+      "input": "1e+21",
+      "expected": "1e+21",
+      "expected_hex": "31652b3231",
+      "expected_sha256": "241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"
+    },
+    {
+      "name": "rfc8785-number-3eb0c6f7a0b5ed8c",
+      "scope": "full",
+      "input": "9.999999999999997e-07",
+      "expected": "9.999999999999997e-7",
+      "expected_hex": "392e393939393939393939393939393937652d37",
+      "expected_sha256": "2ace34b29d30d300aeacd4f2bb83367fa186f11a3f02ed461f35f00fd741a242"
+    },
+    {
+      "name": "rfc8785-number-3eb0c6f7a0b5ed8d",
+      "scope": "full",
+      "input": "1e-06",
+      "expected": "0.000001",
+      "expected_hex": "302e303030303031",
+      "expected_sha256": "159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555553",
+      "scope": "full",
+      "input": "333333333.3333332",
+      "expected": "333333333.3333332",
+      "expected_hex": "3333333333333333332e33333333333332",
+      "expected_sha256": "0fdb7bafaf219ccaf278cd0c0a580473db01c774a0baafe72a07d01230ac5c6d"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555554",
+      "scope": "full",
+      "input": "333333333.33333325",
+      "expected": "333333333.33333325",
+      "expected_hex": "3333333333333333332e3333333333333235",
+      "expected_sha256": "bcbe1777b7d3c91c19c7f90100c595a9b3f1d9b395567da4258baf7ac655d403"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555555",
+      "scope": "full",
+      "input": "333333333.3333333",
+      "expected": "333333333.3333333",
+      "expected_hex": "3333333333333333332e33333333333333",
+      "expected_sha256": "6bd9be1c141028789cc35db62f1b43e80d5d4ee24d6d542e775deb16799ff4c7"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555556",
+      "scope": "full",
+      "input": "333333333.3333334",
+      "expected": "333333333.3333334",
+      "expected_hex": "3333333333333333332e33333333333334",
+      "expected_sha256": "1e099031ca0cb3cf4054688f7e2e8c95fc72828de5fa7605ce3f729e6cf79d43"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555557",
+      "scope": "full",
+      "input": "333333333.33333343",
+      "expected": "333333333.33333343",
+      "expected_hex": "3333333333333333332e3333333333333433",
+      "expected_sha256": "cf68ab5e198a77538aafd967fb122a305ba1df95c9348b1fe3dff453c7f7215f"
+    },
+    {
+      "name": "rfc8785-number-becbf647612f3696",
+      "scope": "full",
+      "input": "-3.3333333333333333e-06",
+      "expected": "-0.0000033333333333333333",
+      "expected_hex": "2d302e30303030303333333333333333333333333333333333",
+      "expected_sha256": "4e703d4e0928e4f339d03e1fb5454ddc33db657ad735b02530d98123b4fd4b61"
+    },
+    {
+      "name": "rfc8785-number-43143ff3c1cb0959",
+      "scope": "full",
+      "input": "1424953923781206.2",
+      "expected": "1424953923781206.2",
+      "expected_hex": "313432343935333932333738313230362e32",
+      "expected_sha256": "e1547479d27f057e3197d49417a1dcbe19dd8781b34fa9f83b789925943d00cb"
+    },
+    {
+      "name": "duplicate-key",
+      "scope": "full",
+      "input": "{\"a\":1,\"a\":2}",
+      "expect_error": true
+    },
+    {
+      "name": "lone-surrogate-value",
+      "scope": "full",
+      "input": "\"\\ud800\"",
+      "expect_error": true
+    },
+    {
+      "name": "lone-surrogate-key",
+      "scope": "full",
+      "input": "{\"\\udc00\":1}",
+      "expect_error": true
+    },
+    {
+      "name": "nan",
+      "scope": "full",
+      "input": "NaN",
+      "expect_error": true
+    },
+    {
+      "name": "infinity-overflow",
+      "scope": "full",
+      "input": "1e400",
+      "expect_error": true
+    },
+    {
+      "name": "not-json",
+      "scope": "full",
+      "input": "{a:1}",
+      "expect_error": true
+    }
+  ]
+}

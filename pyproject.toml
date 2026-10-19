@@ -1,0 +1,52 @@
+[project]
+name = "rhserver"
+version = "0.0.1"
+description = "RemoteHands server: rh-core, rh-agent, rhcore/rhpage CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+rhcore = "rh_cli.rhcore:main"
+rhpage = "rh_cli.rhpage:main"
+rh-agent = "rh_agent.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6",
+    "rfc8785>=0.1.4",
+    "openapi-spec-validator>=0.7",
+    "pyyaml>=6",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-pyyaml",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rh_common", "src/rh_core", "src/rh_agent", "src/rh_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "mac: needs real macOS (run on Илья's Mac)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["rh_common", "rh_core", "rh_agent", "rh_cli"]
