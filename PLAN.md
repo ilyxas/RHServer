@@ -69,7 +69,7 @@ contracts/
   vectors/signed_requests.json    # этап 1
   vectors/request_build.json      # этап 1: тестовый ключ + поля → X-RH-Auth байт-в-байт
   vectors/server_sig.json         # этап 1
-  vectors/ws_frames.json          # этап 3: подписанные кадры WebSocket
+  vectors/ws_frames.json          # этап 1: подписанные кадры WebSocket (hello); этап 3 — события чата
   vectors/approval_hash.json      # этап 4: объект операции → op_sha256
   vectors/ssh_pubkey.json         # этап 6: X9.63 → строка OpenSSH
   vectors/pairing.json            # этап 1: строка pairing → разобранные поля
@@ -111,7 +111,7 @@ contracts/
 - Отказы: HTTP 401/403 и `{"error":{"code","message"}}`, коды: `malformed_auth`, `unknown_device`, `revoked_device`, `wrong_key_level`, `op_mismatch`, `nonce_unknown`, `nonce_used`, `nonce_expired`, `expired`, `clock_skew`, `body_mismatch`, `bad_signature`, `bad_pair_code`, `pair_rejected`, `peer_mismatch` (whois, §3.3). Код нужен клиенту, чтобы отличать **Auth error** от **Pairing lost** (§4.2).
 - В подписываемых объектах только строки и целые; дробные числа запрещены (ядро отвечает `malformed_auth`).
 - `X-RH-Server-Sig`: DER-подпись ключом ядра (base64) над JCS `{"v":1,"nonce":"<nonce запроса>","status":<HTTP-код>,"body":"<sha256 hex тела ответа>"}`; статус внутри, чтобы 4xx нельзя было выдать за 2xx. Подписываются и ответы-отказы. У challenge в запросе nonce нет: подписывается выданный nonce, при отказе — `""`; у pair — код из QR.
-- WebSocket: upgrade-запрос несёт те же `X-RH-Auth`/`X-RH-Sig` с `op: "ws.open"`; сокет привязан к устройству; при отзыве устройства ядро закрывает его сокеты. Кадр сервера: `{"seq":<n>,"type":"…","data":{…},"sig":"<b64>"}`, `seq` растёт с 1 в пределах соединения (дедупликация и контроль пропусков), `sig` — ключом ядра над JCS `{"v":1,"nonce":"<nonce ws.open>","seq":<n>,"body":"<sha256 hex JCS {seq,type,data}>"}`. После переподключения клиент берёт состояние через REST, история по сокету не досылается. Схема событий — `contracts/api/events.schema.json`.
+- WebSocket: upgrade-запрос несёт те же `X-RH-Auth`/`X-RH-Sig` с `op: "ws.open"`; сокет привязан к устройству; при отзыве устройства ядро закрывает его сокеты. Кадр сервера: `{"seq":<n>,"payload":"<JSON-текст {seq,type,data}>","sig":"<b64>"}`, `seq` растёт с 1 в пределах соединения (дедупликация и контроль пропусков), `sig` — ключом ядра над JCS `{"v":1,"nonce":"<nonce ws.open>","seq":<n>,"body":"<sha256 hex байтов payload>"}`. Хэшируется текст `payload` как есть, без повторной канонизации: в `data` бывают дробные числа, которые JCS на двух сторонах сериализует по-разному (изменение этапа 1, contracts PR #3); первым кадром идёт `hello`, при отзыве сокет закрывается кодом 4403. После переподключения клиент берёт состояние через REST, история по сокету не досылается. Схема событий — `contracts/api/events.schema.json`.
 - Чтения могут идти `GET` (тело пустое, `body` = sha256 пустой строки); подпись и challenge — как для всех запросов.
 
 ### Внутренний канал rh-agent ↔ rh-core
