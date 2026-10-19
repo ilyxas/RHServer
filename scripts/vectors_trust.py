@@ -169,6 +169,35 @@ def fixture() -> dict[str, Any]:
 
 # --- ecdsa.json ------------------------------------------------------------------
 
+# A signature made by a real Secure Enclave key on an iPhone (stage 1 acceptance,
+# exported from the app's Debug screen): a ping signed object over "{}" with a
+# zero nonce. Fixed data, not generated; only the public key is known.
+SECURE_ENCLAVE = {
+    "pub_x963_b64": (
+        "BGbjEA7W0EtbOrd6XZb6fUu7qbhen+YIJIMwP9kiheUqHlj1imbS2xR50nyh1bmGdpCXIVmeXFXpUAe6mZxg8wk="
+    ),
+    "message_b64": (
+        "eyJib2R5IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2Fh"
+        "ZmY4YSIsImRldmljZSI6Ijk0ZjEzYTA0MzIyMWYwNWRiM2YwYjBkYWIwYjE2YTk5IiwiZXhwIjoiMjAyNi0xMC0xOVQw"
+        "OTo0Njo0OVoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+        "QUFBQUFBQUE9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDA5OjQ1OjQ5WiIsInYiOjF9"
+    ),
+    "sig_der_b64": (
+        "MEQCIC1sglu98o5ruwQV6W+dP6FcNGxRxE+WzVY+7uwgZwy+AiA0BxPXjsSFbSzWZtWaMi4RCSu3RVsWakGqCR+eNeYRhQ=="
+    ),
+}
+
+
+def secure_enclave_case() -> tuple[bytes, bytes, bytes]:
+    public = b64d(SECURE_ENCLAVE["pub_x963_b64"])
+    message = b64d(SECURE_ENCLAVE["message_b64"])
+    obj = json.loads(message)
+    # The app signs the canonical signed object of the protocol, for its own device id.
+    assert canonicalize(obj) == message
+    assert obj["device"] == device_id(public)
+    assert obj["body"] == hashlib.sha256(b"{}").hexdigest()
+    return public, message, b64d(SECURE_ENCLAVE["sig_der_b64"])
+
 
 def ecdsa_vectors() -> dict[str, Any]:
     message = build_signed_object(
@@ -192,6 +221,17 @@ def ecdsa_vectors() -> dict[str, Any]:
             pub("A.normal"),
             message,
             r.to_bytes(32, "big") + s.to_bytes(32, "big"),
+            False,
+        ),
+    ]
+    se_pub, se_msg, se_sig = secure_enclave_case()
+    cases += [
+        ("secure-enclave-device", se_pub, se_msg, se_sig, True),
+        (
+            "secure-enclave-message-changed",
+            se_pub,
+            se_msg.replace(b"ping", b"pong"),
+            se_sig,
             False,
         ),
     ]

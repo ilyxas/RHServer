@@ -60,7 +60,9 @@ servers:
         default: mac.tailnet.ts.net
         description: MagicDNS name of the owner's Mac
   - url: http://127.0.0.1:8787
-    description: Dev mode (config only, never in a production install)
+    description: >-
+      Dev mode (config only, never in a production install). 8787 by default, any
+      free port when 8787 is taken; the pairing string carries the actual URL.
 paths:
   /v1/challenge:
     post:
