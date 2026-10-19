@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50.0.2",
+    "segno>=1.6.6",
+    "starlette>=1.9.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
@@ -24,6 +27,7 @@ dev = [
     "mypy>=1.11",
     "types-pyyaml",
     "jsonschema>=4.26.0",
+    "httpx>=0.28.1",
 ]
 
 [build-system]
@@ -38,6 +42,10 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "mac: needs real macOS (run on Илья's Mac)",
+]
+filterwarnings = [
+    # starlette.testclient on top of httpx: fine for our tests.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
 
 [tool.ruff]
