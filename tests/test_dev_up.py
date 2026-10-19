@@ -79,6 +79,7 @@ def dev_core(short_dir: Path) -> Iterator[tuple[str, Path, Path]]:
     data = short_dir / "data"
     with run_dev_core(data, "--auto-pair", "--pairing-file", str(pairing), ready=pairing) as addr:
         yield addr, pairing, data
+    assert not pairing.exists(), "a stopped core must not leave its pairing string"
 
 
 def test_pair_challenge_ping_ws(dev_core: tuple[str, Path, Path]) -> None:
@@ -268,3 +269,34 @@ def test_retry_takes_over_a_request_the_core_still_waits_on(short_dir: Path) -> 
 
     assert journal_results(data) == ["rejected", "withdrawn", "accepted"]
     assert verify(data / "journal") == []
+
+
+def test_busy_port_writes_no_pairing_file(short_dir: Path) -> None:
+    """Another program holds the port: the dev core exits without a pairing file,
+    so a UI test never takes it for a running core."""
+    pairing = short_dir / "pairing.txt"
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; from rh_cli.rhcore import main; sys.exit(main())",
+                "dev",
+                "up",
+                "--data",
+                str(short_dir / "data"),
+                "--port",
+                str(port),
+                "--auto-pair",
+                "--pairing-file",
+                str(pairing),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    assert proc.returncode != 0
+    assert not pairing.exists()

@@ -28,11 +28,21 @@ def auto_pair(announce: Callable[[str], None], pairing_file: Path | None) -> Job
 
     A new code is issued after every pairing and on expiry; the current pairing
     string is printed and, if asked, written to `pairing_file` for UI tests.
+    Run through `run`, it starts only once the port listens, and the file is
+    removed when the core stops.
     """
 
     async def job(core: Core) -> None:
         assert core.config.mode == "dev"
         core.pairing.auto_accept = True
+        try:
+            await loop(core)
+        finally:
+            # A stopped core leaves no string behind for the next UI test to trust.
+            if pairing_file is not None:
+                pairing_file.unlink(missing_ok=True)
+
+    async def loop(core: Core) -> None:
         while True:
             session = core.pairing.start()
             if pairing_file is not None:
@@ -54,7 +64,19 @@ def auto_pair(announce: Callable[[str], None], pairing_file: Path | None) -> Job
 
 def run(config: Config, *, background: list[Job] | None = None) -> None:
     core = build_core(config)
-    app = create_app(core, background=background or [])
+    server: uvicorn.Server
+
+    def after_bind(job: Job) -> Job:
+        # Lifespan starts before uvicorn binds the port; a job must not announce
+        # a core that then fails to listen (e.g. the port is taken).
+        async def gated(core: Core) -> None:
+            while not server.started:
+                await anyio.sleep(0.05)
+            await job(core)
+
+        return gated
+
+    app = create_app(core, background=[after_bind(job) for job in background or []])
     server = uvicorn.Server(
         uvicorn.Config(
             app,
