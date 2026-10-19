@@ -1,5 +1,17 @@
 # contracts/ changelog
 
+## Stage 2, Home and Log
+
+- `api/openapi.yaml` 0.2.0:
+  - `POST /v1/data` (`data.get`, normal): a batch of data_id → value. Each value is `active` (`type`, `value`, `unit` for numbers, `at`), `pending` (not built in, not registered) or `error` (`message`). Built-in ids and their types are listed in the operation: `sys.cpu`, `sys.memory` (`%`), `sys.disk_free` (`bytes`), `rh.status` (status), `rh.approvals`, `rh.questions`, `rh.activity`, `agents.status` (rows).
+  - `POST /v1/log` (`log.list`, normal): the Log feed, newest first, with `filter` (all / commands / approvals / chat / errors), `query`, an opaque `before` cursor and `limit`. Entries have `kind`, a ready-to-show `title` and `id` = sha256 of the journal line. Accepted read-only requests are not in the feed.
+  - `GET /v1/quick` (`quick.list`, normal): Quick Access items; always empty until stage 5.
+  - Schemas `DataId`, `DataResult`, `StatusValue`, `Row`, `LogEntry`, `QuickItem`. `Row.status` is a `StatusValue` (SPEC §7.3 leaves its shape open).
+  - New error code `bad_request` (400): the signature checks passed but the body does not fit the operation. Used by stage 2 operations onwards; stage 1 operations keep their behaviour.
+  - Reads with parameters are POST, so the parameters are covered by the signed `body` hash.
+  - Examples on the new operations; a server test validates every example against its schema.
+- No changes to signing, vectors or WebSocket events.
+
 ## Stage 1, real Secure Enclave signature
 
 - `vectors/ecdsa.json`: two new cases, `secure-enclave-device` (valid) and `secure-enclave-message-changed` (invalid), with a signature exported from a real iPhone Secure Enclave key at stage 1 acceptance. Fixed data in `scripts/vectors_trust.py`; the generator checks the message is the canonical signed object for that key's device id. Existing cases are unchanged.

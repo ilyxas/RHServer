@@ -4,7 +4,7 @@ Everything RHServer and RHClient must agree on byte for byte, kept in files inst
 
 | Path | What | Since |
 |---|---|---|
-| `api/openapi.yaml` | HTTP API, signing scheme, error codes; `x-rh-op` / `x-rh-key` on every operation | stage 0 (skeleton), stage 1 (trust) |
+| `api/openapi.yaml` | HTTP API, signing scheme, error codes; `x-rh-op` / `x-rh-key` on every operation | stage 0 (skeleton), stage 1 (trust), stage 2 (data, log, quick access) |
 | `api/events.schema.json` | WebSocket frames and events | stage 1 (frame, `hello`) |
 | `pages/rh.page.v1.schema.json` | page contract (SPEC §7.4) | stage 5 |
 | `manifests/*.schema.json` | `action.json`, `data.json` | stage 5 |
