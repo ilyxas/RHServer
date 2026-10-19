@@ -39,7 +39,7 @@ WHEN_RUNNING: tuple[AgentState, ...] = ("working", "idle", "monitoring")
 @dataclass(frozen=True)
 class Rule:
     id: str
-    process: str  # program name or executable basename
+    process: str  # program name, executable basename or argv[0] basename
     cwd: Path | None = None  # working directory of the process; None: any
     transcripts: str | None = None  # glob; None: Claude Code's default for `claude`
     working_within_s: int = WORKING_WITHIN_S
@@ -65,6 +65,8 @@ class Proc:
     name: str
     exe: str
     cwd: str | None
+    argv0: str = ""  # cmdline[0]: a native claude runs as .../versions/<version> via a
+    # `claude` symlink, so only argv[0] carries the name
 
 
 class ProcessList(Protocol):
@@ -76,9 +78,12 @@ class PsutilProcesses:
 
     def processes(self) -> list[Proc]:
         out = []
-        for p in psutil.process_iter(["name", "exe", "cwd"]):
+        for p in psutil.process_iter(["name", "exe", "cwd", "cmdline"]):
             info = p.info
-            out.append(Proc(name=info["name"] or "", exe=info["exe"] or "", cwd=info["cwd"]))
+            argv = info["cmdline"] or [""]
+            out.append(
+                Proc(name=info["name"] or "", exe=info["exe"] or "", cwd=info["cwd"], argv0=argv[0])
+            )
         return out
 
 
@@ -133,6 +138,6 @@ class ProcessRules:
 
 
 def _matches(rule: Rule, p: Proc) -> bool:
-    if rule.process not in (p.name, os.path.basename(p.exe)):
+    if rule.process not in (p.name, os.path.basename(p.exe), os.path.basename(p.argv0)):
         return False
     return rule.cwd is None or p.cwd == str(rule.cwd)

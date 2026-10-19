@@ -73,6 +73,26 @@ def test_working_then_idle(tmp_path: Path) -> None:
     assert r2.evaluate([Member("A", "")]) == {"A": "working"}
 
 
+def test_match_native_claude_by_argv0() -> None:
+    """Native installer: ~/.local/bin/claude -> ~/.local/share/claude/versions/<version>."""
+    native = Proc(
+        name="2.1.0",
+        exe="/Users/owner/.local/share/claude/versions/2.1.0",
+        cwd=str(HOME / "proj"),
+        argv0="claude",
+    )
+    full_path = Proc(
+        name="2.1.0", exe=native.exe, cwd=native.cwd, argv0="/Users/owner/.local/bin/claude"
+    )
+    rule = Rule(id="A", process="claude", cwd=HOME / "proj")
+    for proc in (native, full_path):
+        r, _ = rules([proc], rule)
+        assert r.evaluate([Member("A", "")]) == {"A": "idle"}
+    other = Proc(name="2.1.0", exe=native.exe, cwd=native.cwd, argv0="/usr/bin/python3")
+    r, _ = rules([other], rule)
+    assert r.evaluate([Member("A", "")]) == {"A": "stopped"}
+
+
 def test_idle_without_transcripts(tmp_path: Path) -> None:
     r, _ = rules(
         [Proc("Voyager", "/Applications/Voyager.app/Contents/MacOS/Voyager", None)],

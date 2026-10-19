@@ -19,7 +19,7 @@ The file is read on every `data.get`, so edits show up at once. Ids in `skip` ar
 
 ## Rules
 
-A rule finds the agent's process by **program name** (or executable basename) and **working directory**, never by app: one app (Claude, ChatGPT) hosts several sessions.
+A rule finds the agent's process by **program name** (process name, executable basename or `argv[0]` basename: a natively installed `claude` runs as `…/versions/<version>` through a `claude` symlink) and **working directory**, never by app: one app (Claude, ChatGPT) hosts several sessions.
 
 | Situation | Status |
 |---|---|
