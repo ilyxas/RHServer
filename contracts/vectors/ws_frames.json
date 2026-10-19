@@ -1,0 +1,53 @@
+{
+  "description": "WebSocket frame: {\"seq\":n,\"payload\":\"<JSON text>\",\"sig\":\"<base64 DER>\"}. sig is the core key over JCS {\"v\":1,\"nonce\":<ws.open nonce>,\"seq\":n,\"body\":<sha256 hex of payload UTF-8 bytes>}. payload parses to {seq,type,data} and its seq must equal the frame seq. seq starts at 1 per connection.",
+  "version": 1,
+  "core_pub_x963_b64": "BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=",
+  "ws_open_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+  "vectors": [
+    {
+      "name": "hello",
+      "frame": {
+        "seq": 1,
+        "payload": "{\"seq\": 1, \"type\": \"hello\", \"data\": {\"device\": \"d75ea68ce8991662334519e0e806a338\", \"server_time\": \"2026-10-19T12:00:00Z\"}}",
+        "sig": "MEYCIQDGS+fHLqrz5LT61ssJyu+0Q/V858nQk9Tjx2XRjMCB1QIhAMvJEbf6NOcVp6axboW7CHVmE6KPhV+YlaRLw810WOC6"
+      },
+      "valid": true
+    },
+    {
+      "name": "event-with-unicode-and-double",
+      "frame": {
+        "seq": 2,
+        "payload": "{\"seq\": 2, \"type\": \"status\", \"data\": {\"text\": \"Агент работает\", \"cpu\": 12.5}}",
+        "sig": "MEUCIQD+RShHUfKv7inQ4GOlBYObVFYEd1VsrDO15VL38JptiAIgcHgZaNZLNX0StSgCPWeCOrSo/c4QF3NWpDGsIwzFg34="
+      },
+      "valid": true
+    },
+    {
+      "name": "seq-changed",
+      "frame": {
+        "seq": 4,
+        "payload": "{\"seq\": 3, \"type\": \"hello\", \"data\": {\"device\": \"d75ea68ce8991662334519e0e806a338\", \"server_time\": \"2026-10-19T12:00:00Z\"}}",
+        "sig": "MEUCIQDAeG5JpEIeNk01ldp77DlGJq1DXZqKV4mXzuKkSiYzXgIgYS0nxLe7Ns1DhyoSnHp/EqG6CWqy0qCNQ4z6NN+MhTI="
+      },
+      "valid": false
+    },
+    {
+      "name": "payload-changed",
+      "frame": {
+        "seq": 5,
+        "payload": "{\"seq\": 5, \"type\": \"hello\", \"data\": {\"device\": \"d75ea68ce8991662334519e0e806a338\", \"server_time\": \"2026-10-19T12:00:00Z\"}}",
+        "sig": "MEYCIQDpD2GotSAUzVrnulXHtXL5ESuiiNoWhexKShlTQTZ9TgIhAPRVyLRa5g0AuQwOMK/2m/seF4I+waoYO0T+OW8QEgs0"
+      },
+      "valid": false
+    },
+    {
+      "name": "signed-by-other-key",
+      "frame": {
+        "seq": 6,
+        "payload": "{\"seq\": 6, \"type\": \"hello\", \"data\": {\"device\": \"d75ea68ce8991662334519e0e806a338\", \"server_time\": \"2026-10-19T12:00:00Z\"}}",
+        "sig": "MEYCIQCc8pH3H+apL+WqT2zxCLOZ18+t8+Qdf5JotLq2DxGS1QIhAJDRUncERE5vGU7yCh3+xvzKNvrrdWygCkJZaWJYBAu7"
+      },
+      "valid": false
+    }
+  ]
+}

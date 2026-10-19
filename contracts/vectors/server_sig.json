@@ -1,0 +1,97 @@
+{
+  "description": "X-RH-Server-Sig: DER signature by the core key over JCS {\"v\":1,\"nonce\":<request nonce>,\"status\":<HTTP status>,\"body\":<sha256 hex of body>}. For /v1/challenge the nonce is the issued one ('' when refused); for /v1/pair the pairing code. expected_message_text is what you should rebuild.",
+  "version": 1,
+  "core_pub_x963_b64": "BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=",
+  "vectors": [
+    {
+      "name": "ping-200",
+      "request_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+      "status": 200,
+      "body_b64": "eyJwb25nIjogdHJ1ZSwgInNlcnZlcl90aW1lIjogIjIwMjYtMTAtMTlUMTI6MDA6MDBaIn0=",
+      "expected_message_text": "{\"body\":\"83886807d43af1de7e4e3bfd27f9124d6b658d5c407dec0f254582a55381e6ef\",\"nonce\":\"Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEYCIQDhMFE3blTvVthuMw8JEV/eYfaSPRW+2awlPnRcuiYQOgIhAOjnh95Uemskbt/w6lRXHkuT6aoYNsMo7pHpQxzpUK4k",
+      "valid": true
+    },
+    {
+      "name": "challenge-200-signs-issued-nonce",
+      "request_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+      "status": 200,
+      "body_b64": "eyJub25jZSI6ICJDYTRaeGl3cVNzTTJ2Wm1KS1ZHNGZoZTBoanZUanBFeVdhMzdXV3pGODk4PSIsICJleHBpcmVzIjogIjIwMjYtMTAtMTlUMTI6MDE6MDBaIiwgInNlcnZlcl90aW1lIjogIjIwMjYtMTAtMTlUMTI6MDA6MDBaIn0=",
+      "expected_message_text": "{\"body\":\"8a0bd41ab0630a0abfe86d92c2d8264a100a5fe6fb4443369931dacb58a4d185\",\"nonce\":\"Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEQCIBYj4fU4WwLSYPfceCjtHRWZT/zboGuN1Y1+odOQEHc2AiB5FfduqNewcbDMUHCxnmUtXQIIvmmivLZUJOJjmQENEw==",
+      "valid": true
+    },
+    {
+      "name": "challenge-403-signs-empty-nonce",
+      "request_nonce": "",
+      "status": 403,
+      "body_b64": "eyJlcnJvciI6IHsiY29kZSI6ICJyZXZva2VkX2RldmljZSIsICJtZXNzYWdlIjogImRldmljZSBpcyByZXZva2VkIn19",
+      "expected_message_text": "{\"body\":\"96b23f487dab70c22d790835ec927797f6cdb0b002a2c1e685451be7ec0c4cc3\",\"nonce\":\"\",\"status\":403,\"v\":1}",
+      "sig_der_b64": "MEYCIQD17kM7zJWM8fQBxI+EG7xvUEr/PjaCI6P5wc/7et3c6gIhAONerLz7KxMbayT1BaZyejsjk20ZNLFdnZ8v9dLdatKr",
+      "valid": true
+    },
+    {
+      "name": "pair-200-signs-code",
+      "request_nonce": "3YO4PGkMMdRj4og3mLqkMc7HPEOyMGN4xrmHxj6cRkY=",
+      "status": 200,
+      "body_b64": "eyJkZXZpY2VfaWQiOiAiMWIwYzkzOTE3MmY1OTQ2YzdkZDlmNmY1NDBlM2FjNTgiLCAibWFjX25hbWUiOiAiaWx5YXMtTWFjQm9vay1BaXIiLCAic3NoX2hvc3Rfa2V5cyI6IFtdfQ==",
+      "expected_message_text": "{\"body\":\"19df62953bcd1092f590894676112105057a818c2b0a4e7db73550f1cc30406a\",\"nonce\":\"3YO4PGkMMdRj4og3mLqkMc7HPEOyMGN4xrmHxj6cRkY=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEUCIEA92pMtlHKGIGWh/L4VJ18iykC6DUAAH9V9Sixuf5xcAiEA/1cdPcpblAXIsvqaQztjn74tyY9oX3Vdqp1dbuZdkBg=",
+      "valid": true
+    },
+    {
+      "name": "rejection-401-is-signed",
+      "request_nonce": "0k7JCU26/O6K6wtQD18SuxrOsJ+1+7gyAi6akpOKrVI=",
+      "status": 401,
+      "body_b64": "eyJlcnJvciI6IHsiY29kZSI6ICJub25jZV91c2VkIiwgIm1lc3NhZ2UiOiAibm9uY2Ugd2FzIGFscmVhZHkgdXNlZCJ9fQ==",
+      "expected_message_text": "{\"body\":\"6a9b2215360aaef9e9068e696fa3c16f37b2af66ef4c887e41cd25adcdf4e12a\",\"nonce\":\"0k7JCU26/O6K6wtQD18SuxrOsJ+1+7gyAi6akpOKrVI=\",\"status\":401,\"v\":1}",
+      "sig_der_b64": "MEYCIQDa8ZJ3amtde5TDif0Ri6BLODyqx2O/lF4wCLei9aDPVQIhAK+GyvrGtb9xj17y/8QzuXdMdcNThx1qZaB/VIrJRBZZ",
+      "valid": true
+    },
+    {
+      "name": "empty-body-204",
+      "request_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+      "status": 204,
+      "body_b64": "",
+      "expected_message_text": "{\"body\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"nonce\":\"Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=\",\"status\":204,\"v\":1}",
+      "sig_der_b64": "MEUCIHjpHcEyvMqs6npqQkbiwCdQgkarJkj0K8gtP9Dl3wk8AiEAjmGhFUX9D8Rtf3UsqkbURVZ09Q4yMsU7wzzTaSFnHVM=",
+      "valid": true
+    },
+    {
+      "name": "status-changed",
+      "request_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+      "status": 200,
+      "body_b64": "eyJlcnJvciI6IHsiY29kZSI6ICJyZXZva2VkX2RldmljZSIsICJtZXNzYWdlIjogImRldmljZSBpcyByZXZva2VkIn19",
+      "expected_message_text": "{\"body\":\"96b23f487dab70c22d790835ec927797f6cdb0b002a2c1e685451be7ec0c4cc3\",\"nonce\":\"Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEQCIBcr9/kkVlWogekQfaLHMZRSt2yklqqbfnq2Uocnu7ClAiApvhfbbp1miVWDS+BYFdeL2troPDKelncuwXJdEh/5Ag==",
+      "valid": false
+    },
+    {
+      "name": "body-changed",
+      "request_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+      "status": 200,
+      "body_b64": "eyJwb25nIjogZmFsc2UsICJzZXJ2ZXJfdGltZSI6ICIyMDI2LTEwLTE5VDEyOjAwOjAwWiJ9",
+      "expected_message_text": "{\"body\":\"5c1deba154fecbafd2a85e59a071dd913ed3cc1b398a439fce3ebb096ac71ab6\",\"nonce\":\"Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEYCIQDhMFE3blTvVthuMw8JEV/eYfaSPRW+2awlPnRcuiYQOgIhAOjnh95Uemskbt/w6lRXHkuT6aoYNsMo7pHpQxzpUK4k",
+      "valid": false
+    },
+    {
+      "name": "nonce-changed",
+      "request_nonce": "0k7JCU26/O6K6wtQD18SuxrOsJ+1+7gyAi6akpOKrVI=",
+      "status": 200,
+      "body_b64": "eyJwb25nIjogdHJ1ZSwgInNlcnZlcl90aW1lIjogIjIwMjYtMTAtMTlUMTI6MDA6MDBaIn0=",
+      "expected_message_text": "{\"body\":\"83886807d43af1de7e4e3bfd27f9124d6b658d5c407dec0f254582a55381e6ef\",\"nonce\":\"0k7JCU26/O6K6wtQD18SuxrOsJ+1+7gyAi6akpOKrVI=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEYCIQDhMFE3blTvVthuMw8JEV/eYfaSPRW+2awlPnRcuiYQOgIhAOjnh95Uemskbt/w6lRXHkuT6aoYNsMo7pHpQxzpUK4k",
+      "valid": false
+    },
+    {
+      "name": "signed-by-other-key",
+      "request_nonce": "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=",
+      "status": 200,
+      "body_b64": "eyJwb25nIjogdHJ1ZSwgInNlcnZlcl90aW1lIjogIjIwMjYtMTAtMTlUMTI6MDA6MDBaIn0=",
+      "expected_message_text": "{\"body\":\"83886807d43af1de7e4e3bfd27f9124d6b658d5c407dec0f254582a55381e6ef\",\"nonce\":\"Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898=\",\"status\":200,\"v\":1}",
+      "sig_der_b64": "MEYCIQCJBQlxb5IyJqNpxQVbJDzQTihpNAB6642jsWp9EP/t5QIhAKUWHsc/1QS37nFqweHGcVPYggsuRGdhSG0v+9bUHZQK",
+      "valid": false
+    }
+  ]
+}

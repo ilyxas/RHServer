@@ -4,7 +4,9 @@ version = "0.0.1"
 description = "RemoteHands server: rh-core, rh-agent, rhcore/rhpage CLI"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "cryptography>=50.0.2",
+]
 
 [project.scripts]
 rhcore = "rh_cli.rhcore:main"
@@ -21,6 +23,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-pyyaml",
+    "jsonschema>=4.26.0",
 ]
 
 [build-system]
