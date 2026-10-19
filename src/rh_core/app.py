@@ -330,7 +330,14 @@ async def _finish_pair(
     assert candidate is not None
     result = "expired"
     try:
-        await anyio.to_thread.run_sync(candidate.decided.wait, core.pairing.seconds_left(session))
+        if await _wait_decision(core, session, candidate, request):
+            # The phone is gone: nobody would get device_id and ssh_host_keys. Keep the
+            # code open so it can retry with the same QR.
+            result = "withdrawn"
+            core.journal.append(
+                "pairing", device=req.obj.device, result="withdrawn", peer=_peer(request)
+            )
+            return Response(status_code=499)
         if not candidate.accepted:
             if candidate.decided.is_set() and not session.closed:
                 result = "rejected"
@@ -372,7 +379,26 @@ async def _finish_pair(
         }
         return core.signed(200, payload, req.obj.nonce)
     finally:
-        core.pairing.finish(session, result)
+        if result != "withdrawn":
+            core.pairing.finish(session, result)
+
+
+async def _wait_decision(
+    core: Core, session: Session, candidate: Candidate, request: Request
+) -> bool:
+    """Wait for y/n or expiry; True if the phone disconnected first and was withdrawn."""
+    while not candidate.decided.is_set():
+        left = core.pairing.seconds_left(session)
+        if left <= 0:
+            return False
+        await anyio.to_thread.run_sync(candidate.decided.wait, min(left, 1.0))
+        if (
+            not candidate.decided.is_set()
+            and await request.is_disconnected()
+            and core.pairing.withdraw(session, candidate)
+        ):
+            return True
+    return False
 
 
 def _peer(request: Request) -> str | None:
