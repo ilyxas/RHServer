@@ -400,18 +400,19 @@ paths:
         entry has a kind; the filter picks kinds:
 
           all        every entry below
-          commands   kind command: pairing, device revoked, accepted requests that
-                     change something (later: action.invoke, registry.register,
-                     pages.*, chat.stop / chat.reset)
+          commands   kind command: what changed, written when it happens:
+                     pairing, device revoked (later: action calls, registrations,
+                     page changes, chat stop / reset)
           approvals  kind approval (stage 4)
           chat       kind chat (stage 3): one entry per message, title = author
                      ("owner" or "RemoteHands"), detail = text
           errors     kind error: rejected requests, rejected pairing, failures
 
         Kind system (core started / stopped and the like) shows only under all.
-        Accepted read-only requests (ping, status, devices.list, data.get,
-        log.list, quick.list, ws.open, challenge) stay in the journal file but are
-        not in the feed.
+        Accepted requests stay in the journal file but are not in the feed: reads
+        (ping, status, devices.list, data.get, log.list, quick.list, ws.open,
+        challenge) are noise, and for a command the feed shows its effect instead
+        of the request (one entry "Revoked Мой iPhone", not two).
 
         `query` is a case-insensitive substring match over title, detail, event,
         op and device. `before` is the `next` value of the previous page; pages
