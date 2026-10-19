@@ -308,7 +308,8 @@ async def pair(request: Request) -> Response:
             raise ProtocolError(
                 "pair_rejected", "these keys are already registered; generate new keys"
             )
-        session = core.pairing.submit(_candidate(core, req, peer))
+        candidate = _candidate(core, req, peer)
+        session = core.pairing.submit(candidate)
         if session is None:
             raise ProtocolError("bad_pair_code", "pairing code is unknown, used or expired")
     except ProtocolError as e:
@@ -316,7 +317,7 @@ async def pair(request: Request) -> Response:
             "pairing", result="rejected", reason=e.code, detail=e.message, peer=_peer(request)
         )
         return core.refuse(e, nonce)
-    return await _finish_pair(core, session, req, peer, request)
+    return await _finish_pair(core, session, candidate, req, peer, request)
 
 
 def _candidate(core: Core, req: PairRequest, peer: str | None) -> Candidate:
@@ -324,15 +325,18 @@ def _candidate(core: Core, req: PairRequest, peer: str | None) -> Candidate:
 
 
 async def _finish_pair(
-    core: Core, session: Session, req: PairRequest, peer: str, request: Request
+    core: Core,
+    session: Session,
+    candidate: Candidate,
+    req: PairRequest,
+    peer: str,
+    request: Request,
 ) -> Response:
-    candidate = session.candidate
-    assert candidate is not None
     result = "expired"
     try:
-        if await _wait_decision(core, session, candidate, request):
-            # The phone is gone: nobody would get device_id and ssh_host_keys. Keep the
-            # code open so it can retry with the same QR.
+        if await _wait_decision(core, session, candidate, request) or candidate.withdrawn:
+            # The phone is gone, or its retry took this request's place: nobody would get
+            # device_id and ssh_host_keys here. Keep the code open for the retry.
             result = "withdrawn"
             core.journal.append(
                 "pairing", device=req.obj.device, result="withdrawn", peer=_peer(request)

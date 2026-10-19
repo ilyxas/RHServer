@@ -15,7 +15,8 @@ request passes verification, `{"event": "pair.request", "device_id", "name",
 `{"cmd": "pair.decide", "accept": true|false, "fingerprint": "<as shown>"}` and
 the core ends with
 `{"event": "pair.done", "result": "accepted"|"rejected"|"expired"|"cancelled"}`.
-If the phone hangs up before the answer, the core sends
+If the phone hangs up before the answer, or sends the same keys again (it lost
+the first connection without the core noticing), the core sends
 `{"event": "pair.withdrawn", "device_id"}` and waits for the next request with
 the same code; an answer naming another fingerprint is ignored, so a late `y`
 never approves a request the terminal did not show. Closing the connection
