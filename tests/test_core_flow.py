@@ -116,7 +116,7 @@ def pair(
     pending = send_pair(client, phone, string, replaces)
     req = admin.recv()
     assert req["event"] == "pair.request"
-    admin.send({"cmd": "pair.decide", "accept": True})
+    admin.send({"cmd": "pair.decide", "accept": True, "fingerprint": req["fingerprint"]})
     done = admin.recv()
     admin.close()
     r = finish(pending)
@@ -172,8 +172,9 @@ def test_declined_in_terminal(env: Any) -> None:
     core, client, _, _ = env
     admin, string = start_pair(core)
     pending = send_pair(client, Phone(), string)
-    assert admin.recv()["event"] == "pair.request"
-    admin.send({"cmd": "pair.decide", "accept": False})
+    req = admin.recv()
+    assert req["event"] == "pair.request"
+    admin.send({"cmd": "pair.decide", "accept": False, "fingerprint": req["fingerprint"]})
     assert admin.recv() == {"event": "pair.done", "result": "rejected"}
     r = finish(pending)
     assert r.status_code == 403 and r.json()["error"]["code"] == "pair_rejected"

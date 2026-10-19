@@ -26,6 +26,7 @@ class Candidate:
     peer: str | None
     decided: threading.Event = field(default_factory=threading.Event)
     accepted: bool = False
+    withdrawn: bool = False  # the phone hung up before the terminal answered
 
 
 @dataclass
@@ -88,15 +89,29 @@ class Pairing:
             s.arrived.set()
             return s
 
-    def decide(self, session: Session, accept: bool) -> None:
+    def decide(self, session: Session, accept: bool, candidate: Candidate | None = None) -> None:
         with self._lock:
             c = session.candidate
-            if c is None or c.decided.is_set():
+            if c is None or c.decided.is_set() or (candidate is not None and c is not candidate):
                 return
             c.accepted = accept
             if accept:
                 session.used = True
             c.decided.set()
+
+    def withdraw(self, session: Session, candidate: Candidate) -> bool:
+        """The phone disconnected while waiting: drop its request, keep the code.
+
+        False if the terminal already answered (then the outcome stands).
+        """
+        with self._lock:
+            if session.candidate is not candidate or candidate.decided.is_set() or session.closed:
+                return False
+            candidate.withdrawn = True
+            candidate.decided.set()
+            session.candidate = None
+            session.arrived.clear()
+            return True
 
     def finish(self, session: Session, result: str) -> None:
         """Called once the outcome is written: close the session."""

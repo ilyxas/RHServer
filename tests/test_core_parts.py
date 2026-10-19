@@ -11,11 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from refclient import Phone
 from rh_cli import rhcore
-from rh_common.protocol import NonceRecord
+from rh_common.protocol import NonceRecord, PairCode, PairRequest, SignedObject, fingerprint
 from rh_core import journal
+from rh_core.admin import _decision
 from rh_core.config import Config, ConfigError, dev_config, from_dict, load, to_toml
 from rh_core.keys import load_or_create
+from rh_core.pairing import Candidate, Pairing
 from rh_core.peers import TailscaleWhois, parse_whois
 from rh_core.store import Store
 
@@ -238,3 +241,41 @@ def test_whois_cli_called_and_cached(tmp_path: Path) -> None:
 
 def test_whois_missing_binary() -> None:
     assert TailscaleWhois(os.devnull + "/nope").node("100.64.0.7", 1) is None
+
+
+# --- pairing session -----------------------------------------------------------------------
+
+
+def make_candidate(code: str) -> Candidate:
+    phone = Phone()
+    obj = SignedObject(device=phone.id, key="normal", nonce=code, ts="", exp="", op="pair", body="")
+    req = PairRequest(obj=obj, name=phone.name, keys={}, keys_b64=phone.pub, replaces=None)
+    return Candidate(request=req, fingerprint=fingerprint(phone.pub), peer="local")
+
+
+def test_withdrawn_request_frees_the_code() -> None:
+    pairing = Pairing(url="http://127.0.0.1:8787", core_key_b64="", clock=lambda: T0)
+    session = pairing.open(PairCode(code="c", expires=T0 + timedelta(minutes=5)))
+    first = make_candidate("c")
+    assert pairing.submit(first) is session
+    assert pairing.find_code("c") == PairCode(code="c", expires=session.code.expires, used=True)
+    assert pairing.withdraw(session, first) is True
+    assert first.withdrawn and first.decided.is_set() and not first.accepted
+    assert session.candidate is None and not session.arrived.is_set() and not session.closed
+    assert pairing.find_code("c") == PairCode(code="c", expires=session.code.expires, used=False)
+    pairing.decide(session, True, first)  # a late answer to the withdrawn request
+    assert session.used is False
+    assert pairing.withdraw(session, first) is False
+    second = make_candidate("c")
+    assert pairing.submit(second) is session
+    pairing.decide(session, True, second)
+    assert second.accepted and pairing.withdraw(session, second) is False
+
+
+def test_answer_must_name_the_shown_fingerprint() -> None:
+    line = json.dumps({"cmd": "pair.decide", "accept": True, "fingerprint": "aaaa"}).encode()
+    assert _decision(line, "aaaa") is True
+    assert _decision(line, "bbbb") is None
+    assert _decision(b'{"cmd": "pair.decide", "accept": true}', "aaaa") is None
+    assert _decision(b"garbage", "aaaa") is False
+    assert _decision(b'{"cmd": "nope"}', "aaaa") is False

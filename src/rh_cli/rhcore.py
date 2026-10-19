@@ -206,7 +206,7 @@ def _pair(cfg: Config, stdin: TextIO, out: TextIO) -> int:
             flush=True,
         )
         msg = _recv(f)
-        if msg.get("event") == "pair.request":
+        while msg.get("event") == "pair.request":
             print("", file=out)
             print("Запрос на pairing:", file=out)
             print(f"  устройство: {msg['name']}", file=out)
@@ -221,8 +221,23 @@ def _pair(cfg: Config, stdin: TextIO, out: TextIO) -> int:
                 flush=True,
             )
             answer = stdin.readline().strip().lower()
-            _send(f, {"cmd": "pair.decide", "accept": answer in ("y", "yes", "д", "да")})
+            _send(
+                f,
+                {
+                    "cmd": "pair.decide",
+                    "accept": answer in ("y", "yes", "д", "да"),
+                    "fingerprint": msg["fingerprint"],
+                },
+            )
             msg = _recv(f)
+            while msg.get("event") == "pair.withdrawn":
+                print(
+                    "Телефон отключился до ответа, устройство не добавлено. "
+                    "Жду повтор с тем же кодом…",
+                    file=out,
+                    flush=True,
+                )
+                msg = _recv(f)
         result = msg.get("result")
         text = {
             "accepted": f"Готово: устройство {msg.get('device_id')} добавлено.",

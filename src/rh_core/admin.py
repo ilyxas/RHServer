@@ -12,9 +12,14 @@ JSON Lines both ways. Each connection sends one command:
 `{"event": "pair.code", "string", "expires"}`, then, when a phone's /v1/pair
 request passes verification, `{"event": "pair.request", "device_id", "name",
 "fingerprint", "revokes": [{"id", "name"}]}`. The terminal answers
-`{"cmd": "pair.decide", "accept": true|false}` and the core ends with
+`{"cmd": "pair.decide", "accept": true|false, "fingerprint": "<as shown>"}` and
+the core ends with
 `{"event": "pair.done", "result": "accepted"|"rejected"|"expired"|"cancelled"}`.
-Closing the connection cancels the session.
+If the phone hangs up before the answer, the core sends
+`{"event": "pair.withdrawn", "device_id"}` and waits for the next request with
+the same code; an answer naming another fingerprint is ignored, so a late `y`
+never approves a request the terminal did not show. Closing the connection
+cancels the session.
 
 Not part of contracts/: the phone never sees this socket.
 """
@@ -140,37 +145,53 @@ async def _pair(core: Core, reader: asyncio.StreamReader, writer: asyncio.Stream
     )
     lines = _Lines(reader)
     try:
-        # Wait for a verified request, the code to expire, or the terminal to go away.
-        arrived = await lines.race(session.arrived, lambda: pairing.seconds_left(session))
-        if arrived is None:
-            pairing.cancel(session)
-            return
-        if not arrived or session.candidate is None:
-            pairing.cancel(session, "expired")
-            await _send(writer, {"event": "pair.done", "result": session.result})
-            return
-        req = session.candidate.request
-        revokes = set(core.replaced_by(req))
-        await _send(
-            writer,
-            {
-                "event": "pair.request",
-                "device_id": req.obj.device,
-                "name": req.name,
-                "fingerprint": session.candidate.fingerprint,
-                "revokes": [
-                    {"id": d.id, "name": d.name} for d in core.store.devices() if d.id in revokes
-                ],
-            },
-        )
-        if not session.candidate.decided.is_set():
-            line = await lines.next(pairing.seconds_left(session))
-            if line is None:
+        while True:
+            # Wait for a verified request, the code to expire, or the terminal to go away.
+            arrived = await lines.race(session.arrived, lambda: pairing.seconds_left(session))
+            if arrived is None:
+                pairing.cancel(session)
+                return
+            candidate = session.candidate
+            if not arrived or candidate is None:
                 pairing.cancel(session, "expired")
-            elif not line:
-                pairing.cancel(session, "cancelled")
-            else:
-                pairing.decide(session, _accepts(line))
+                await _send(writer, {"event": "pair.done", "result": session.result})
+                return
+            req = candidate.request
+            revokes = set(core.replaced_by(req))
+            await _send(
+                writer,
+                {
+                    "event": "pair.request",
+                    "device_id": req.obj.device,
+                    "name": req.name,
+                    "fingerprint": candidate.fingerprint,
+                    "revokes": [
+                        {"id": d.id, "name": d.name}
+                        for d in core.store.devices()
+                        if d.id in revokes
+                    ],
+                },
+            )
+            while not candidate.decided.is_set():
+                got = await lines.line_or(candidate.decided, lambda: pairing.seconds_left(session))
+                if got is None:
+                    if not candidate.decided.is_set():
+                        pairing.cancel(session, "expired")
+                    break
+                if not got:
+                    pairing.cancel(session, "cancelled")
+                    break
+                if got is _EVENT:
+                    break
+                answer = _decision(got, candidate.fingerprint)
+                if answer is not None:  # None: an answer to an earlier, withdrawn request
+                    pairing.decide(session, answer, candidate)
+                    break
+            if candidate.withdrawn:
+                # The phone hung up before the answer; the same code waits for it again.
+                await _send(writer, {"event": "pair.withdrawn", "device_id": req.obj.device})
+                continue
+            break
         await anyio.to_thread.run_sync(session.done.wait, pairing.seconds_left(session) + 30)
         out: dict[str, Any] = {"event": "pair.done", "result": session.result}
         if session.result == "accepted":
@@ -180,6 +201,9 @@ async def _pair(core: Core, reader: asyncio.StreamReader, writer: asyncio.Stream
         await lines.close()
         if not session.closed:
             pairing.cancel(session)
+
+
+_EVENT = b"<event>"
 
 
 class _Lines:
@@ -221,15 +245,22 @@ class _Lines:
             if not waiter.done():
                 await waiter
 
-    async def next(self, timeout: float) -> bytes | None:
-        """The next line (b"" at EOF), or None on timeout."""
-        done, _ = await asyncio.wait({self._task()}, timeout=timeout)
-        if not done:
-            return None
-        line = self._pending
-        self._pending = None
-        assert line is not None
-        return line.result()
+    async def line_or(self, event: threading.Event, left: Callable[[], float]) -> bytes | None:
+        """The next line (b"" at EOF); _EVENT if the event fires first; None when time is up."""
+        while True:
+            if event.is_set():
+                return _EVENT
+            remaining = left()
+            if remaining <= 0:
+                return None
+            # Slices of a second: the waiting thread never outlives the answer by more.
+            slice_ = min(remaining, 1.0)
+            waiter = asyncio.ensure_future(anyio.to_thread.run_sync(event.wait, slice_))
+            line = self._task()
+            done, _ = await asyncio.wait({waiter, line}, return_when=asyncio.FIRST_COMPLETED)
+            if line in done:
+                self._pending = None
+                return line.result()
 
     async def close(self) -> None:
         if self._pending is not None:
@@ -238,9 +269,14 @@ class _Lines:
                 await self._pending
 
 
-def _accepts(line: bytes) -> bool:
+def _decision(line: bytes, fingerprint: str) -> bool | None:
+    """y/n from a pair.decide line; None if it answers a request with another fingerprint."""
     try:
         msg = json.loads(line)
     except ValueError:
         return False
-    return isinstance(msg, dict) and msg.get("cmd") == "pair.decide" and msg.get("accept") is True
+    if not isinstance(msg, dict) or msg.get("cmd") != "pair.decide":
+        return False
+    if msg.get("fingerprint") != fingerprint:
+        return None
+    return msg.get("accept") is True
