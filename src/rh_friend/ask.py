@@ -16,6 +16,12 @@ with every command, so one is required here too, exactly as the call will carry 
 the call will carry other fields as well (timeout, run_in_background), ask with --input
 and the full object, and run it with the same fields.
 
+Claude Code fills some fields in before the hook sees the call: an Edit call reaches the
+gate with `"replace_all": false` even when the model did not send it (found in the live
+switch of 2026-10-24: an allow for the input without it never matched). `--input` gets
+those defaults added when they are missing (TOOL_DEFAULTS), and the printed input shows
+them, so the asked action is the one the gate will see.
+
 A plain call of this program is never a protected action for the gate, whatever the
 question says: asking must not need an answer first.
 """
@@ -33,6 +39,20 @@ from rh_common.friend import action_text, question_sha256
 from rh_friend import config as friend_config
 from rh_friend.config import GateConfig
 from rh_friend.gate import SOCKET_TIMEOUT_S, CoreUnreachable
+
+# Fields Claude Code adds to a tool's input before PreToolUse, with the value it adds.
+# Only what was seen in a real hook input goes here.
+TOOL_DEFAULTS: dict[str, dict[str, Any]] = {
+    "Edit": {"replace_all": False},
+}
+
+
+def with_defaults(tool: str, tool_input: Any) -> Any:
+    """The input as the gate will see it: the tool's defaults added where missing."""
+    defaults = TOOL_DEFAULTS.get(tool)
+    if not defaults or not isinstance(tool_input, dict):
+        return tool_input
+    return {**defaults, **tool_input}
 
 
 def call(gate: GateConfig, msg: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("--tool and --input (or --bash) are required")
             tool = args.tool
             try:
-                tool_input = json.loads(args.input)
+                tool_input = with_defaults(tool, json.loads(args.input))
             except ValueError as e:
                 parser.error(f"--input is not JSON: {e}")
         action = action_text(tool, tool_input)

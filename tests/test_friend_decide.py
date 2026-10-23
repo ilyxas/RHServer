@@ -907,6 +907,15 @@ def test_ask_cli(env: Any, tmp_path: Path, capsys: Any) -> None:
         ]
     )
     assert rc == 0 and len(core.store.open_questions()) == 2
+    # Claude Code hands an Edit to the gate with replace_all filled in: the asked action
+    # has it too, or the owner's allow would never match the call.
+    (edit,) = [q for q in core.store.open_questions() if q.text == "Edit?"]
+    assert edit.action == action_text(
+        "Edit", {"file_path": "/x", "old_string": "a", "new_string": "b", "replace_all": False}
+    )
+    assert '"replace_all": false' in capsys.readouterr().out
+    assert ask.with_defaults("Edit", {"replace_all": True}) == {"replace_all": True}
+    assert ask.with_defaults("Write", {"file_path": "/x"}) == {"file_path": "/x"}
     assert ask.main(["--config", str(toml), "--list"]) == 0
     assert qid in capsys.readouterr().out
     assert ask.main(["--config", str(toml), "--withdraw", qid]) == 0
