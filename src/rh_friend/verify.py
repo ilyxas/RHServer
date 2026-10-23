@@ -10,6 +10,12 @@
 - Any other input: the label `[unsigned]`. Input that draws a verified label by
   itself is blocked.
 - Outside the configured project the hook does nothing.
+- With `require_protected = true` (managed install) a pointer is accepted only when
+  the config and the device list, and their directories, cannot be changed by the
+  user the hook runs as: they hold the trust anchors (pinned core key, devices).
+
+The signed `exp` (60 s after `ts`) is not applied: delivery to a busy session can
+take longer, so the hook uses its own window on `ts` instead.
 
 The core, the spool and the bridge are transport only; a broken or replaced one
 can make a message fail, never pass.
@@ -22,7 +28,10 @@ import contextlib
 import fcntl
 import json
 import os
+import re
+import stat
 import sys
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -47,6 +56,16 @@ from rh_friend.config import MAX_FUTURE_S, FriendConfig
 
 VERIFIED_MARK = "RH ✔"
 UNSIGNED_LABEL = "[unsigned]"
+# Anything that could pass for the verified label once normalized: a check-mark-like
+# sign after "RH", or a bracketed "[RH".
+_LABEL_LIKE = re.compile(r"RH\s*[\u2713\u2714\u2705\u2611\U0001F5F8]|\[\s*RH\b", re.IGNORECASE)
+
+
+def looks_like_label(text: str) -> bool:
+    folded = unicodedata.normalize("NFKC", text)
+    folded = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    folded = re.sub(r"\s+", " ", folded)
+    return _LABEL_LIKE.search(folded) is not None
 
 
 class Reject(Exception):
@@ -158,12 +177,14 @@ def handle(
     prompt = str(event.get("prompt", ""))
     match = POINTER_RE.match(prompt.strip())
     if match is None:
-        if VERIFIED_MARK in prompt:
+        if looks_like_label(prompt):
             return _block(cfg, None, "forged_label", "the input draws a verification label itself")
         return _context(UNSIGNED_LABEL)
     sid = match.group(1)
     at = now()
     try:
+        if cfg.require_protected:
+            _check_protected(cfg)
         envelope = _load_envelope(cfg, sid)
         devices = _load_devices(cfg)
         with _locked(cfg.seen_file) as ledger:
@@ -207,8 +228,27 @@ def _load_devices(cfg: FriendConfig) -> dict[str, DeviceEntry]:
         raise Reject("devices_untrusted", f"cannot read the device list: {e.strerror}") from e
     try:
         return read_devices_doc(data, core_pub=cfg.core_key)
-    except (ValueError, KeyError, TypeError) as e:
-        raise Reject("devices_untrusted", str(e)) from e
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise Reject("devices_untrusted", str(e) or type(e).__name__) from e
+
+
+def _check_protected(cfg: FriendConfig) -> None:
+    """The trust anchors must not be writable by the user the hook runs as."""
+    uid = os.getuid()
+    paths = [cfg.devices_file, cfg.devices_file.parent]
+    if cfg.source is not None:
+        paths += [cfg.source, cfg.source.parent]
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError as e:
+            raise Reject("unprotected", f"cannot stat {path}: {e.strerror}") from e
+        if (
+            st.st_uid == uid
+            or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or os.access(path, os.W_OK)
+        ):
+            raise Reject("unprotected", f"{path} can be changed by this user")
 
 
 def _ts(dt: datetime) -> str:
@@ -229,25 +269,37 @@ def _block(cfg: FriendConfig, sid: str | None, code: str, detail: str) -> dict[s
     }
 
 
+def fallback(prompt: str, reason: str) -> dict[str, Any]:
+    """When the hook cannot do its job: never pass a pointer or a label, mark the rest."""
+    if POINTER_RE.match(prompt.strip()) or looks_like_label(prompt):
+        return {
+            "decision": "block",
+            "reason": f"RemoteHands: cannot verify ({reason})",
+            "hookSpecificOutput": {"hookEventName": "UserPromptSubmit"},
+        }
+    return _context(UNSIGNED_LABEL)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rh-friend-verify", description=__doc__)
     parser.add_argument("--config", type=Path, default=friend_config.DEFAULT_PATH)
     args = parser.parse_args(argv)
+    raw = sys.stdin.read()
     try:
-        event = json.load(sys.stdin)
+        event = json.loads(raw)
         if not isinstance(event, dict):
             raise ValueError("hook input is not an object")
     except ValueError as e:
         print(f"rh-friend-verify: {e}", file=sys.stderr)
+        print(json.dumps(fallback(raw, "unreadable hook input"), ensure_ascii=False))
         return 0
+    prompt = str(event.get("prompt", ""))
     try:
         cfg = friend_config.load(args.config)
-    except friend_config.ConfigError as e:
-        print(f"rh-friend-verify: {e}", file=sys.stderr)
-        if POINTER_RE.match(str(event.get("prompt", "")).strip()):
-            print(json.dumps({"decision": "block", "reason": f"RemoteHands: {e}"}))
-        return 0
-    out = handle(event, cfg, project_dir=os.environ.get("CLAUDE_PROJECT_DIR"))
+        out = handle(event, cfg, project_dir=os.environ.get("CLAUDE_PROJECT_DIR"))
+    except Exception as e:  # config missing or broken, or a bug: fail closed
+        print(f"rh-friend-verify: {type(e).__name__}: {e}", file=sys.stderr)
+        out = fallback(prompt, type(e).__name__)
     if out is not None:
         print(json.dumps(out, ensure_ascii=False))
     return 0

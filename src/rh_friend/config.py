@@ -11,6 +11,7 @@ from here; nothing about a particular Mac or person is built in.
     rejected_log = "~/Friend/log/rh_rejected.jsonl"
     window_s     = 900                           # how old a message may be when it arrives
     owner_label  = "owner"                       # shown in the verified label
+    require_protected = false                    # true for the managed (root-owned) install
 
     [bridge]
     tmux   = "/opt/homebrew/bin/tmux"
@@ -20,6 +21,7 @@ from here; nothing about a particular Mac or person is built in.
 
 from __future__ import annotations
 
+import dataclasses
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +56,8 @@ class FriendConfig:
     window_s: int = DEFAULT_WINDOW_S
     owner_label: str = "owner"
     bridge: BridgeConfig | None = None
+    require_protected: bool = False  # managed install: anchors not writable by the hook's user
+    source: Path | None = None  # the file this config was read from
 
 
 _TOP = {
@@ -66,6 +70,7 @@ _TOP = {
     "window_s",
     "owner_label",
     "bridge",
+    "require_protected",
 }
 _REQUIRED = ("project_dir", "inbox_dir", "devices_file", "core_key", "seen_file", "rejected_log")
 
@@ -75,7 +80,8 @@ def load(path: Path) -> FriendConfig:
         doc = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise ConfigError(f"cannot read {path}: {e}") from e
-    return from_dict(doc, base=path.parent)
+    cfg = from_dict(doc, base=path.parent)
+    return dataclasses.replace(cfg, source=path)
 
 
 def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
@@ -98,6 +104,9 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
     window = doc.get("window_s", DEFAULT_WINDOW_S)
     if isinstance(window, bool) or not isinstance(window, int) or window < 1:
         raise ConfigError("window_s must be a positive integer (seconds)")
+    protected = doc.get("require_protected", False)
+    if not isinstance(protected, bool):
+        raise ConfigError("require_protected must be true or false")
     label = doc.get("owner_label", "owner")
     if not isinstance(label, str) or not label:
         raise ConfigError("owner_label must be a non-empty string")
@@ -111,6 +120,7 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
         window_s=window,
         owner_label=label,
         bridge=_bridge(doc["bridge"], path) if "bridge" in doc else None,
+        require_protected=protected,
     )
 
 
