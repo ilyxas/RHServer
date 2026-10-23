@@ -1,5 +1,6 @@
-"""friend.send: contracts/vectors/friend.json through the real core, the Friend
-verifier hook and the tmux bridge, plus the core's signed device list.
+"""friend.send: contracts/vectors/friend.json through the real core, the agent-side
+verifier hook and the tmux bridge, plus the core's signed device list. The channel agent
+is the vectors' `agent` (Agent-Alpha), the dev core's default.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from rh_common.crypto import b64d, public_x963
 from rh_common.friend import parse_envelope, pointer, read_devices_doc
 from rh_common.protocol import parse_ts
 from rh_core.app import Core, create_app
+from rh_core.config import ConfigError as CoreConfigError
 from rh_core.config import dev_config, to_toml
 from rh_friend import bridge
 from rh_friend.config import BridgeConfig, ConfigError, FriendConfig, from_dict
@@ -87,7 +89,7 @@ def test_build_vectors_verify_as_requests(core: Core) -> None:
     assert r.status_code == 200, r.text
     for v in FRIEND["build"]:
         doc = json.loads(b64d(v["expected_body_b64"]))
-        assert doc == {"id": v["id"], "text": v["text"], "to": "Friend"}
+        assert doc == {"id": v["id"], "text": v["text"], "to": FRIEND["agent"]}
         assert b64d(v["expected_body_b64"]).decode() == v["expected_body_text"]
 
 
@@ -122,6 +124,7 @@ def friend_config(tmp: Path, devices_doc: str, *, project: Path | None = None) -
     devices.write_text(devices_doc, encoding="utf-8")
     return from_dict(
         {
+            "agent": FRIEND["agent"],
             "project_dir": str(project or tmp / "project"),
             "inbox_dir": str(inbox),
             "devices_file": str(devices),
@@ -217,6 +220,7 @@ def test_hook_process_end_to_end(tmp_path: Path) -> None:
         "\n".join(
             f"{k} = {json.dumps(str(val))}"
             for k, val in (
+                ("agent", cfg.agent),
                 ("project_dir", cfg.project_dir),
                 ("inbox_dir", cfg.inbox_dir),
                 ("devices_file", cfg.devices_file),
@@ -250,6 +254,7 @@ def test_hook_process_end_to_end(tmp_path: Path) -> None:
 
 def test_config_rejects_unknown_and_bad_keys(tmp_path: Path) -> None:
     good = {
+        "agent": "Agent-Alpha",
         "project_dir": "/p",
         "inbox_dir": "/i",
         "devices_file": "/d",
@@ -262,10 +267,32 @@ def test_config_rejects_unknown_and_bad_keys(tmp_path: Path) -> None:
         {**good, "extra": 1},
         {**good, "core_key": "not-a-key"},
         {**good, "window_s": 0},
-        {k: v for k, v in good.items() if k != "seen_file"},
+        {**good, "agent": "Agent Alpha"},
+        {**good, "seen_file": ""},
+        {k: v for k, v in good.items() if k != "agent"},
+        {k: v for k, v in good.items() if k != "project_dir"},
     ):
         with pytest.raises(ConfigError):
             from_dict(bad)
+
+
+def test_config_paths_default_into_the_project() -> None:
+    doc = {
+        "agent": "Agent-Alpha",
+        "project_dir": "/p",
+        "inbox_dir": "/i",
+        "devices_file": "/d",
+        "core_key": FRIEND["core_pub_x963_b64"],
+        "bridge": {"target": "alpha"},
+        "gate": {"admin_socket": "/a.sock"},
+    }
+    cfg = from_dict(doc)
+    assert cfg.seen_file == Path("/p/state/rh_seen.jsonl")
+    assert cfg.rejected_log == Path("/p/log/rh_rejected.jsonl")
+    assert cfg.bridge is not None and cfg.bridge.state_file == Path("/p/state/rh_bridge.json")
+    assert cfg.gate is not None and cfg.gate.log == Path("/p/log/rh_gate.jsonl")
+    with pytest.raises(ConfigError, match="target"):
+        from_dict({**doc, "bridge": {"tmux": "tmux"}})  # no default target
 
 
 # --- bridge --------------------------------------------------------------------------------
@@ -327,13 +354,20 @@ def test_rhcore_friend_config_pins_the_core_key(short_dir: Path, tmp_path: Path)
     toml = tmp_path / "core.toml"
     toml.write_text(to_toml(core.config), encoding="utf-8")
     out = io.StringIO()
-    args = argparse.Namespace(config=toml, project=tmp_path / "proj", tmux="tmux", target="friend")
+    args = argparse.Namespace(config=toml, project=None, tmux="tmux", owner_names="owner")
     assert rhcore._friend_config(args, out) == 0
     cfg = from_dict(tomllib.loads(out.getvalue()))
+    assert cfg.agent == core.config.ch.agent == "Agent-Alpha"
+    assert cfg.project_dir == core.config.ch.project_dir
     assert cfg.core_key == public_x963(core.key)
     assert cfg.inbox_dir == core.config.inbox_dir
     assert cfg.devices_file == core.config.devices_path
-    assert cfg.bridge is not None and cfg.bridge.target == "friend"
+    assert cfg.bridge is not None and cfg.bridge.target == core.config.ch.target
+    assert cfg.gate is not None and cfg.gate.decide_window_s == core.config.decide_window_s
+    # --project is only a check: another folder is an error, not another agent.
+    other = argparse.Namespace(config=toml, project=tmp_path / "x", tmux="tmux", owner_names="o")
+    with pytest.raises(CoreConfigError, match="channel set"):
+        rhcore._friend_config(other, io.StringIO())
 
 
 def _run_main(toml: Path, prompt: str, project: Path) -> dict[str, Any]:
@@ -401,6 +435,7 @@ def test_require_protected_flag_cannot_be_turned_off_by_the_config(tmp_path: Pat
         "\n".join(
             f"{k} = {json.dumps(str(val))}"
             for k, val in (
+                ("agent", cfg.agent),
                 ("project_dir", cfg.project_dir),
                 ("inbox_dir", cfg.inbox_dir),
                 ("devices_file", cfg.devices_file),

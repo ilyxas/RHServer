@@ -16,7 +16,7 @@ from rh_cli import rhcore
 from rh_common.protocol import NonceRecord, PairCode, PairRequest, SignedObject, fingerprint
 from rh_core import journal
 from rh_core.admin import _decision
-from rh_core.config import Config, ConfigError, dev_config, from_dict, load, to_toml
+from rh_core.config import Channel, Config, ConfigError, dev_config, from_dict, load, to_toml
 from rh_core.keys import load_or_create
 from rh_core.pairing import Candidate, Pairing
 from rh_core.peers import TailscaleWhois, parse_whois
@@ -91,6 +91,9 @@ def test_journal_verify_cli_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str
 # --- config --------------------------------------------------------------------------
 
 
+CHANNEL = {"agent": "Agent-Alpha", "project_dir": "/Users/owner/Alpha", "target": "alpha"}
+
+
 def prod(**kw: object) -> Config:
     doc: dict[str, object] = {
         "mode": "production",
@@ -98,6 +101,7 @@ def prod(**kw: object) -> Config:
         "host": "mac.tail1234.ts.net",
         "tls_cert": "/var/rh/mac.crt",
         "tls_key": "/var/rh/mac.key",
+        "channel": CHANNEL,
     }
     doc.update(kw)
     return from_dict({k: v for k, v in doc.items() if v is not None})
@@ -149,6 +153,55 @@ def test_config_rejects_unknown_keys_and_modes() -> None:
         from_dict({"mode": "test", "data_dir": "/tmp/x"})
 
 
+def test_channel_is_required_and_has_no_defaults() -> None:
+    with pytest.raises(ConfigError, match=r"\[channel\] is required"):
+        prod(channel=None).validate(user="owner")
+    for key in ("agent", "project_dir", "target"):
+        with pytest.raises(ConfigError, match=f"{key} is required"):
+            prod(channel={k: v for k, v in CHANNEL.items() if k != key})
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"agent": "Agent Alpha"}, "agent id"),
+        ({"agent": "a" * 33}, "agent id"),
+        ({"agent": "../x"}, "agent id"),
+        ({"target": "a b"}, "tmux target"),
+        ({"project_dir": "relative"}, "absolute"),
+        ({"decide_window_s": 0}, "positive"),
+        ({"extra": 1}, "unknown"),
+    ],
+)
+def test_channel_values_are_checked(change: dict[str, object], message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        prod(channel={**CHANNEL, **change})
+
+
+def test_old_friend_table_is_refused_with_a_pointer() -> None:
+    with pytest.raises(ConfigError, match=r"renamed to \[channel\]"):
+        prod(friend={"decide_window_s": 60})
+
+
+def test_channel_paths_default_into_data_dir() -> None:
+    cfg = prod()
+    assert cfg.ch.agent == "Agent-Alpha"
+    assert cfg.inbox_dir == Path("/var/rh/inbox")
+    assert cfg.devices_path == Path("/var/rh/devices.json")
+    assert cfg.decide_window_s == 120
+    assert cfg.team_file is None  # no default team file: it is the owner's choice
+    # The channel agent gets an agents.status rule from project_dir...
+    (rule,) = cfg.rules
+    assert (rule.id, rule.process, rule.cwd) == (
+        "Agent-Alpha",
+        "claude",
+        Path("/Users/owner/Alpha"),
+    )
+    # ...unless one is configured for it.
+    own = {"id": "Agent-Alpha", "process": "codex"}
+    assert [r.process for r in prod(agents={"rule": [own]}).rules] == ["codex"]
+
+
 def test_config_toml_round_trip(tmp_path: Path) -> None:
     cfg = Config(
         mode="production",
@@ -160,6 +213,13 @@ def test_config_toml_round_trip(tmp_path: Path) -> None:
         tls_cert=tmp_path / "c.crt",
         tls_key=tmp_path / "c.key",
         tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        channel=Channel(
+            agent="Agent-Alpha",
+            project_dir=tmp_path / "Alpha",
+            target="alpha:0.1",
+            inbox_dir=tmp_path / "in box",
+            decide_window_s=60,
+        ),
     )
     path = tmp_path / "core.toml"
     path.write_text(to_toml(cfg), encoding="utf-8")

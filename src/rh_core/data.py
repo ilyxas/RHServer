@@ -39,6 +39,7 @@ class DataSources:
         agent_version: Callable[[], str | None],
         clock: Callable[[], datetime],
         questions: Callable[[], list[Question]] = list,
+        agent_title: Callable[[], str] = lambda: "the agent",
     ) -> None:
         self.probe = probe
         self.team = team
@@ -48,13 +49,14 @@ class DataSources:
         self.agent_version = agent_version
         self.clock = clock
         self.questions = questions
+        self.agent_title = agent_title
         self.builtin: dict[str, Callable[[], Reading]] = {
             "sys.cpu": lambda: ("number", round(self.probe.cpu_percent(), 1), "%"),
             "sys.memory": lambda: ("number", round(self.probe.memory_percent(), 1), "%"),
             "sys.disk_free": lambda: ("number", self.probe.disk_free(), "bytes"),
             "rh.status": self._status,
             "rh.approvals": lambda: ("rows", [], None),  # stage 4
-            "rh.questions": self._questions,  # Friend's questions; the agent's at stage 3
+            "rh.questions": self._questions,  # the channel agent's questions
             "rh.activity": self._activity,
             "agents.status": lambda: ("rows", self.team.rows(), None),
         }
@@ -70,7 +72,7 @@ class DataSources:
         return "status", {"state": "ok", "text": f"core {self.core_version} · agent {agent}"}, None
 
     def _questions(self) -> Reading:
-        """One row per open Friend question: title = the question's first line, subtitle =
+        """One row per open question of the channel agent: title = its first line, subtitle =
         the tool it names; the Chat tab shows text and action in full."""
         rows = []
         for q in self.questions():
@@ -79,7 +81,7 @@ class DataSources:
                 {
                     "id": q.id,
                     "title": first[:200],
-                    "subtitle": f"Friend asks · {_tool_of(q.action)}",
+                    "subtitle": f"{self.agent_title()} asks · {_tool_of(q.action)}",
                     "status": {"state": "warn", "text": "waiting"},
                     "at": q.asked_at,
                 }

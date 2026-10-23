@@ -1,4 +1,4 @@
-"""Ask the owner, from the Friend session, for a decision on one exact tool call.
+"""Ask the owner, from the channel agent's session, for a decision on one exact tool call.
 
     rh-friend-ask --config <friend.toml> --question "<why>" --tool Bash \\
                   --input '{"command": "kill -CONT 4242", "description": "resume the agent"}'

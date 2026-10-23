@@ -1,7 +1,11 @@
-"""Signed messages and decisions from the phone to the Friend session
+"""Signed messages and decisions from the phone to the channel agent's session
 (`friend.send`, `friend.decide`, `friend.questions`).
 
-Pure functions shared by rh-core, the Friend verifier, the Friend gate and the
+"friend" is the name of the mechanism, after the agent that designed it and first
+worked on it; the agent on the channel is whoever `[channel] agent` names. Its id is
+a parameter here, never a constant.
+
+Pure functions shared by rh-core, the agent-side verifier, the gate and the
 vector generator: the message and decision bodies, the action text a decision
 names, the envelope the core spools for the bridge, the pointer line typed into
 tmux, and the device list the core exports for the verifier.
@@ -27,13 +31,13 @@ from rh_common.protocol import HEADER_AUTH, HEADER_SIG, format_ts
 OP_SEND = "friend.send"
 OP_DECIDE = "friend.decide"
 OP_QUESTIONS = "friend.questions"
-RECIPIENT = "Friend"
 
-MAX_TEXT = 8000  # characters; the message goes into the Friend session's context
+MAX_TEXT = 8000  # characters; the message goes into the agent session's context
 MAX_ACTION = 65536  # characters of canonical JSON naming the exact tool call
 DECISIONS = ("allow", "deny")
 # allow needs a fresh Face ID (critical); deny is signed like any message (normal).
 KEY_FOR_DECISION: dict[str, str] = {"allow": "critical", "deny": "normal"}
+AGENT_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{1,32}\Z")
 _MSG_ID_RE = re.compile(r"\A[A-Za-z0-9-]{1,64}\Z")
 _SPOOL_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -50,9 +54,16 @@ class FriendMessage:
     text: str
 
 
-def parse_body(body: bytes) -> FriendMessage:
-    """{"to": "Friend", "id": "<1–64 of A-Za-z0-9->", "text": "<1–8000 characters>"};
-    nothing else."""
+def check_agent_id(agent: Any) -> str:
+    """The channel agent's id: 1–32 of A-Za-z0-9_- (it takes part in paths)."""
+    if not isinstance(agent, str) or not AGENT_ID_RE.match(agent):
+        raise ValueError("agent id must be 1–32 characters A-Z, a-z, 0-9, _ or -")
+    return agent
+
+
+def parse_body(body: bytes, agent: str) -> FriendMessage:
+    """{"to": "<agent>", "id": "<1–64 of A-Za-z0-9->", "text": "<1–8000 characters>"};
+    nothing else. `to` must be exactly the channel agent's id."""
     try:
         doc = json.loads(body)
     except (ValueError, UnicodeDecodeError) as e:
@@ -60,8 +71,8 @@ def parse_body(body: bytes) -> FriendMessage:
     if not isinstance(doc, dict) or set(doc) != {"to", "id", "text"}:
         raise ValueError("body must have exactly to, id, text")
     to, msg_id, text = doc["to"], doc["id"], doc["text"]
-    if to != RECIPIENT:
-        raise ValueError(f'to must be "{RECIPIENT}"')
+    if to != agent:
+        raise ValueError(f'to must be "{agent}", the channel agent')
     if not isinstance(msg_id, str) or not _MSG_ID_RE.match(msg_id):
         raise ValueError("id must be 1–64 characters A-Z, a-z, 0-9 or -")
     if not isinstance(text, str) or not text.strip():
@@ -135,8 +146,8 @@ class FriendDecision:
         return KEY_FOR_DECISION[self.decision]
 
 
-def parse_decide_body(body: bytes) -> FriendDecision:
-    """{"to": "Friend", "id": "<question id>", "question_sha256": "<hex>", "action": "<JCS>",
+def parse_decide_body(body: bytes, agent: str) -> FriendDecision:
+    """{"to": "<agent>", "id": "<question id>", "question_sha256": "<hex>", "action": "<JCS>",
     "decision": "allow" | "deny"}; nothing else."""
     try:
         doc = json.loads(body)
@@ -145,8 +156,8 @@ def parse_decide_body(body: bytes) -> FriendDecision:
     fields = {"to", "id", "question_sha256", "action", "decision"}
     if not isinstance(doc, dict) or set(doc) != fields:
         raise ValueError(f"body must have exactly {sorted(fields)}")
-    if doc["to"] != RECIPIENT:
-        raise ValueError(f'to must be "{RECIPIENT}"')
+    if doc["to"] != agent:
+        raise ValueError(f'to must be "{agent}", the channel agent')
     qid = doc["id"]
     if not isinstance(qid, str) or not _SPOOL_ID_RE.match(qid):
         raise ValueError("id must be the question id, 32 lowercase hex")
@@ -157,13 +168,13 @@ def parse_decide_body(body: bytes) -> FriendDecision:
         raise ValueError(f"decision must be one of {list(DECISIONS)}")
     action = check_action(doc["action"])
     return FriendDecision(
-        to=RECIPIENT, id=qid, question_sha256=digest, action=action, decision=doc["decision"]
+        to=agent, id=qid, question_sha256=digest, action=action, decision=doc["decision"]
     )
 
 
 @dataclass(frozen=True)
 class Question:
-    """A question Friend asked; the phone shows text and action in full."""
+    """A question the channel agent asked; the phone shows text and action in full."""
 
     id: str  # 32 hex
     text: str
@@ -293,6 +304,7 @@ def read_devices_doc(data: bytes, *, core_pub: bytes) -> dict[str, DeviceEntry]:
 
 
 __all__ = [
+    "AGENT_ID_RE",
     "DECISIONS",
     "KEY_FOR_DECISION",
     "MAX_ACTION",
@@ -301,7 +313,6 @@ __all__ = [
     "OP_QUESTIONS",
     "OP_SEND",
     "POINTER_RE",
-    "RECIPIENT",
     "DeviceEntry",
     "Envelope",
     "FriendDecision",
@@ -310,6 +321,7 @@ __all__ = [
     "action_text",
     "build_devices_doc",
     "check_action",
+    "check_agent_id",
     "check_question_text",
     "envelope_from_headers",
     "parse_body",

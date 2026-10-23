@@ -130,7 +130,7 @@ class Core:
             team=Team(
                 config.team_file,
                 skip=config.team_skip,
-                rules=ProcessRules(config.agent_rules) if config.agent_rules else None,
+                rules=ProcessRules(config.rules) if config.rules else None,
             ),
             journal_dir=config.journal_dir,
             names=self.device_name,
@@ -138,8 +138,48 @@ class Core:
             agent_version=lambda: None,  # rh-agent arrives at stage 3
             clock=self.clock,
             questions=self.store.open_questions,
+            agent_title=lambda: self.agent_title,
         )
         self.export_devices()
+        self.bind_channel()
+
+    # --- the channel agent -------------------------------------------------------
+
+    @property
+    def agent(self) -> str:
+        """The channel agent's id: `[channel] agent`, the only place it is set."""
+        return self.config.ch.agent
+
+    @property
+    def agent_title(self) -> str:
+        """How the app and the Log name the agent. The team file lists ids, so the title
+        is the id itself, whether or not the team file has it."""
+        return self.agent
+
+    def bind_channel(self) -> None:
+        """On start: bind the store to the configured agent. Another agent than last time
+        withdraws the previous agent's open questions and voids its unused allows
+        (journal `friend.channel.changed`). An id missing from the team file is shown as
+        is, with a warning in the journal; the core still starts."""
+        change = self.store.bind_channel(self.agent, now=self.clock())
+        if change is not None:
+            self.journal.append(
+                "friend.channel.changed",
+                **{"from": change.previous, "to": change.agent},
+                withdrawn=change.withdrawn,
+                voided=change.voided,
+            )
+        try:
+            members = {m.id for m in self.data.team.members()}
+        except OSError as e:
+            self.journal.append("friend.channel.warning", agent=self.agent, reason=str(e)[:200])
+            return
+        if self.config.team_file is not None and self.agent not in members:
+            self.journal.append(
+                "friend.channel.warning",
+                agent=self.agent,
+                reason=f"{self.agent} is not in the team file {self.config.team_file}",
+            )
 
     def device_name(self, device_id: str) -> str | None:
         row = self.store.device_row(device_id)
@@ -176,7 +216,7 @@ class Core:
     # --- device lifecycle ------------------------------------------------------
 
     def export_devices(self) -> None:
-        """Write the signed device list the Friend verifier reads (on start, pairing, revoke)."""
+        """Write the signed device list the agent-side verifier reads (start, pairing, revoke)."""
         entries = []
         for row in self.store.devices():
             device = self.store.device(row.id)
@@ -199,10 +239,10 @@ class Core:
                 await conn.websocket.close(code=WS_CLOSE_REVOKED)
         return True
 
-    # --- Friend questions and decisions -----------------------------------------
+    # --- the channel agent's questions and decisions ------------------------------
 
     def ask(self, text: str, action: str) -> Question:
-        """Record a question from the Friend gate (admin socket); the phone lists it."""
+        """Record a question from the gate (admin socket); the phone lists it."""
         text = check_question_text(text)
         action = check_action(action)
         now = self.clock()
@@ -212,9 +252,10 @@ class Core:
             action=action,
             asked_at=format_ts(now),
         )
-        self.store.add_question(question)
+        self.store.add_question(question, agent=self.agent)
         self.journal.append(
             "friend.question",
+            agent=self.agent,
             id=question.id,
             question_sha256=question_sha256(text),
             action_sha256=sha256_hex(action.encode("utf-8")),
@@ -229,6 +270,7 @@ class Core:
         for decision_id in self.store.void_unused_allows(action, now=now, by=by, keep=keep):
             self.journal.append(
                 "friend.decision.voided",
+                agent=self.agent,
                 id=decision_id,
                 reason=reason,
                 by=by,
@@ -238,7 +280,7 @@ class Core:
     def withdraw(self, question_id_: str) -> bool:
         ok = self.store.withdraw_question(question_id_, now=self.clock())
         if ok:
-            self.journal.append("friend.question.withdrawn", id=question_id_)
+            self.journal.append("friend.question.withdrawn", agent=self.agent, id=question_id_)
         return ok
 
     def check_decision(self, decision: FriendDecision) -> str | None:
@@ -262,7 +304,7 @@ class Core:
 
         The core checks everything itself, whatever the gate checked: the decision exists,
         names this action and question, says allow with the critical key, is not voided by
-        a later deny or question, is fresh (`[friend] decide_window_s` after both the phone's
+        a later deny or question, is fresh (`[channel] decide_window_s` after both the phone's
         `ts` and the core's `accepted_at`) and unused. Every refusal is journaled.
 
         Returns {"ok": True, ...} or {"ok": False, "error": code, "message"}.
@@ -271,7 +313,11 @@ class Core:
 
         def refuse(code: str, message: str) -> dict[str, Any]:
             self.journal.append(
-                "friend.decision.refused", id=decision_id, reason=code, action_sha256=action_sha
+                "friend.decision.refused",
+                agent=self.agent,
+                id=decision_id,
+                reason=code,
+                action_sha256=action_sha,
             )
             return _refused(code, message)
 
@@ -312,6 +358,7 @@ class Core:
             return refuse("already_used", "this decision was already used")
         self.journal.append(
             "friend.decision.used",
+            agent=self.agent,
             id=decision_id,
             question_id=row.question_id,
             action_sha256=sha256_hex(action.encode("utf-8")),
@@ -449,6 +496,7 @@ async def status(core: Core, verdict: Verdict, body: bytes) -> tuple[int, dict[s
         "agent_version": None,
         "mode": core.config.mode,
         "server_time": format_ts(core.clock()),
+        "channel": {"agent": core.agent, "title": core.agent_title},
     }
 
 
@@ -498,7 +546,7 @@ async def quick_list(core: Core, verdict: Verdict, body: bytes) -> tuple[int, di
 
 
 async def friend_questions(core: Core, verdict: Verdict, body: bytes) -> tuple[int, dict[str, Any]]:
-    """friend.questions: what Friend is waiting for the owner to decide, oldest first."""
+    """friend.questions: what the channel agent is waiting for the owner to decide."""
     return 200, {
         "questions": [q.to_api() for q in core.store.open_questions()],
         "server_time": format_ts(core.clock()),
@@ -511,13 +559,13 @@ def _refused(code: str, message: str) -> dict[str, Any]:
 
 async def friend_send(request: Request) -> Response:
     """friend.send: verify like any signed operation, then spool the request exactly as
-    received, so the Friend verifier can check the phone's signature itself."""
+    received, so the agent-side verifier can check the phone's signature itself."""
     core: Core = request.app.state.core
     body = await request.body()
     verdict = _verify(core, request.headers, body, OP_SEND, "normal", request.client, journal=False)
     if verdict.error is None:
         try:
-            message = parse_body(body)
+            message = parse_body(body, core.agent)
         except ValueError as e:
             verdict = Verdict(
                 obj=verdict.obj,
@@ -535,6 +583,7 @@ async def friend_send(request: Request) -> Response:
     _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
     core.journal.append(
         "friend.message",
+        agent=core.agent,
         device=verdict.device.id,
         id=sid,
         message_id=message.id,
@@ -549,7 +598,7 @@ async def friend_decide(request: Request) -> Response:
     """friend.decide: the owner's answer to a question. Verified like any signed operation
     with the key the object names; then the body must fit, the key level must fit the
     decision (allow: critical, deny: normal) and the decision must answer an open question
-    exactly. Accepted: recorded, spooled as received for the Friend verifier, question closed."""
+    exactly. Accepted: recorded, spooled as received for the verifier, question closed."""
     core: Core = request.app.state.core
     body = await request.body()
     try:
@@ -560,7 +609,7 @@ async def friend_decide(request: Request) -> Response:
     decision: FriendDecision | None = None
     if verdict.error is None:
         try:
-            decision = parse_decide_body(body)
+            decision = parse_decide_body(body, core.agent)
             if decision.key_level != key:
                 raise ProtocolError(
                     "wrong_key_level",
@@ -601,6 +650,7 @@ async def friend_decide(request: Request) -> Response:
         signed_at=verdict.obj.ts,
         accepted_at=format_ts(now),
         used_at=None,
+        agent=core.agent,
     )
     if not core.store.answer_question(row):  # a second answer raced this one
         error = ProtocolError("bad_request", f"question {decision.id} is already answered")
@@ -618,6 +668,7 @@ async def friend_decide(request: Request) -> Response:
     _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
     core.journal.append(
         "friend.decision",
+        agent=core.agent,
         device=verdict.device.id,
         id=sid,
         question_id=decision.id,
@@ -642,7 +693,7 @@ async def friend_decide(request: Request) -> Response:
 
 
 def _write_public(path: Path, data: bytes) -> None:
-    """Atomic write of a file the Friend session's user reads (mode 644). A directory it
+    """Atomic write of a file the agent session's user reads (mode 644). A directory it
     creates is 755; an existing one keeps its mode, so the core's own data directory stays
     700 and production points these paths elsewhere (config [friend])."""
     missing = [p for p in (path.parent, *path.parent.parents) if not p.exists()]

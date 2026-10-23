@@ -1,5 +1,14 @@
 # contracts/ changelog
 
+## Any single agent on the channel (docs/any_single_agent.md)
+
+- `api/openapi.yaml` 0.5.0:
+  - `status` gains the required `channel: {agent, title}` (schema `Channel`): the one agent the phone talks to, `[channel] agent` in the core config. The app takes `to` and every name it shows from it; it can change between two `status` calls when the owner switches the agent.
+  - `to` of `friend.send` and `FriendDecision` is no longer `const: Friend` but the channel agent's id (`^[A-Za-z0-9_-]{1,32}$`); any value other than the configured agent is `bad_request`.
+  - Descriptions name "the channel agent"; "friend" stays the name of the mechanism (paths, ops, schemas), after the agent that designed it and first worked on it.
+- `vectors/friend.json` version 2 and `vectors/friend_decide.json` version 3: top-level `agent` (`Agent-Alpha`, deliberately not "Friend"); every body is addressed to it; wrong-recipient cases use `Agent-Beta`. The verifier's envelope with another `to` is now blocked as `wrong_recipient` (was `bad_body`); `friend_decide.json` has the same envelope case.
+- No changes to signing, operations, key levels or WebSocket events. Only the value of `to` in signed bodies changes.
+
 ## friend.decide, last round before the live test
 
 - `vectors/friend_decide.json` version 2, `gate` section: for one action the newest decision by signed `ts` counts and a deny wins a tie. `deny-and-allow-both-present` (allowed) is replaced by `deny-and-allow-signed-at-the-same-time` (denied), `allow-then-a-newer-deny` (denied) and `deny-then-a-newer-allow` (allowed). Other sections and `friend.json` are byte for byte the same.

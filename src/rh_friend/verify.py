@@ -1,4 +1,4 @@
-"""UserPromptSubmit hook for the Friend session: label every input by its proof.
+"""UserPromptSubmit hook for the channel agent's session: label every input by its proof.
 
     rh-friend-verify --config <friend.toml>      (reads the hook JSON on stdin)
 
@@ -87,15 +87,19 @@ def check_envelope(
     now: datetime,
     window: timedelta,
     seen: Callable[[str], bool],
+    agent: str,
     ops: tuple[str, ...] = (OP_SEND, OP_DECIDE),
 ) -> Verified:
     """Order for friend.send (unchanged since slice 1): malformed → pointer_mismatch →
     unknown_device → revoked_device → op_mismatch → wrong_key_level → bad_signature →
-    body_mismatch → bad_body → too_old → from_future → replayed.
+    body_mismatch → wrong_recipient → bad_body → too_old → from_future → replayed.
+
+    wrong_recipient: a genuine envelope addressed to another agent than this session's
+    (`to` ≠ the config's `agent`), e.g. one signed before the channel was switched.
 
     friend.decide names its key level in the body (allow: critical, deny: normal), so
     the signature is checked with the key the object names and the level with the
-    body: … → op_mismatch → bad_signature → body_mismatch → bad_body →
+    body: … → op_mismatch → bad_signature → body_mismatch → wrong_recipient → bad_body →
     wrong_key_level → too_old → from_future → replayed. Raises Reject."""
     try:
         obj, raw = parse_auth(envelope.auth)
@@ -120,8 +124,9 @@ def check_envelope(
             raise Reject("bad_signature", "signature does not match the device's normal key")
         if body_hash(envelope.body) != obj.body:
             raise Reject("body_mismatch", "body hash does not match the signed object")
+        _check_recipient(envelope.body, agent)
         try:
-            message = parse_body(envelope.body)
+            message = parse_body(envelope.body, agent)
         except ValueError as e:
             raise Reject("bad_body", str(e)) from e
     else:
@@ -129,8 +134,9 @@ def check_envelope(
             raise Reject("bad_signature", f"signature does not match the device's {obj.key} key")
         if body_hash(envelope.body) != obj.body:
             raise Reject("body_mismatch", "body hash does not match the signed object")
+        _check_recipient(envelope.body, agent)
         try:
-            decision = parse_decide_body(envelope.body)
+            decision = parse_decide_body(envelope.body, agent)
         except ValueError as e:
             raise Reject("bad_body", str(e)) from e
         if obj.key != KEY_FOR_DECISION[decision.decision]:
@@ -147,6 +153,17 @@ def check_envelope(
     if seen(obj.nonce):
         raise Reject("replayed", "this message was already delivered")
     return Verified(device=device, obj=obj, message=message, decision=decision)
+
+
+def _check_recipient(body: bytes, agent: str) -> None:
+    """A body whose `to` is a string other than this agent is someone else's message; any
+    other shape is left to the body parser (bad_body)."""
+    try:
+        to = json.loads(body).get("to")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return
+    if isinstance(to, str) and to != agent:
+        raise Reject("wrong_recipient", f"addressed to {to!r}, this session is {agent!r}")
 
 
 # --- ledger and logs -----------------------------------------------------------------
@@ -215,6 +232,7 @@ def handle(
                 now=at,
                 window=timedelta(seconds=cfg.window_s),
                 seen=seen.__contains__,
+                agent=cfg.agent,
             )
             ledger.seek(0, os.SEEK_END)
             ledger.write(json.dumps({"nonce": verified.obj.nonce, "id": sid, "at": _ts(at)}) + "\n")

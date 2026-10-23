@@ -1,10 +1,10 @@
-"""Bridge from the core's friend inbox to the Friend tmux session.
+"""Bridge from the core's inbox to the channel agent's tmux session.
 
     rh-friend-bridge --config <friend.toml> [--once]
 
 For each new envelope in inbox_dir it types one line, `⟦rh:<id>⟧`, into the
 configured tmux target and presses Enter. It never reads the message: the
-Friend verifier loads and checks the envelope itself. Delivered ids are kept in
+agent-side verifier loads and checks the envelope itself. Delivered ids are kept in
 [bridge] state_file, so a restart does not type them again.
 """
 

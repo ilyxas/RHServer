@@ -13,7 +13,7 @@ JSON Lines both ways. Each connection sends one command:
     {"cmd": "friend.decision.use", "id": "<decision id>", "action": "<as asked>",
      "question_sha256": "<sha256 of the question text>"}
 
-`friend.*` is how the Friend gate (rh-friend-gate, rh-friend-ask) talks to the core:
+`friend.*` is how the agent-side gate (rh-friend-gate, rh-friend-ask) talks to the core:
 a question goes to the phone through friend.questions; a signed friend.decide
 answers it; `friend.decision.use` spends an allow decision for exactly that
 action once (the first caller wins, every later one is refused). The gate has
@@ -139,6 +139,7 @@ async def _dispatch(
                 "mac_name": core.config.mac_name,
                 "url": core.config.public_url,
                 "server_time": format_ts(core.clock()),
+                "channel": {"agent": core.agent, "title": core.agent_title},
             },
         )
     elif cmd == "devices.list":
@@ -157,13 +158,18 @@ async def _dispatch(
         try:
             question = core.ask(str(msg.get("text") or ""), str(msg.get("action") or ""))
         except ValueError as e:
-            core.journal.append("friend.question.refused", reason=str(e)[:200])
+            core.journal.append("friend.question.refused", agent=core.agent, reason=str(e)[:200])
             await _send(writer, {"ok": False, "error": "bad_request", "message": str(e)})
         else:
             await _send(writer, {"ok": True, **question.to_api()})
     elif cmd == "friend.questions":
         await _send(
-            writer, {"ok": True, "questions": [q.to_api() for q in core.store.open_questions()]}
+            writer,
+            {
+                "ok": True,
+                "agent": core.agent,
+                "questions": [q.to_api() for q in core.store.open_questions()],
+            },
         )
     elif cmd == "friend.question.withdraw":
         target = msg.get("id")

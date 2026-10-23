@@ -1,4 +1,4 @@
-"""agents.status (SPEC §5.4): the team from ~/Friend/CLAUDE.md and its statuses.
+"""agents.status (SPEC §5.4): the team from the configured team file and its statuses.
 
 The team is the bullet list under the heading that starts with "Команда"
 ("## Команда (идентификаторы)"), one member per line:

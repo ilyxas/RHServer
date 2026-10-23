@@ -1,5 +1,5 @@
 """friend.decide / friend.questions: contracts/vectors/friend_decide.json through the real
-core, the Friend verifier hook and the Friend gate, plus the gate end to end over the
+core, the agent-side verifier hook and the gate, plus the gate end to end over the
 core's admin socket, the ask CLI and the config.
 """
 
@@ -57,6 +57,7 @@ VECTORS = Path(__file__).parent.parent / "contracts" / "vectors"
 FD = json.loads((VECTORS / "friend_decide.json").read_text(encoding="utf-8"))
 FRIEND = json.loads((VECTORS / "friend.json").read_text(encoding="utf-8"))
 QUESTION = Question(**FD["question"])
+AGENT = FD["agent"]  # the channel agent of the vectors and of the dev core
 
 
 def ids(vs: list[dict[str, Any]]) -> list[str]:
@@ -74,7 +75,7 @@ def events(core: Core) -> list[dict[str, Any]]:
 @pytest.fixture
 def core(short_dir: Path) -> Iterator[Core]:
     c = seeded_core(short_dir)
-    c.store.add_question(QUESTION)
+    c.store.add_question(QUESTION, agent=AGENT)
     yield c
     c.store.close()
 
@@ -89,7 +90,7 @@ def test_build_vectors() -> None:
     assert action_text(b["action"]["tool"], b["action"]["input"]) == b["action"]["expected_action"]
     assert check_action(b["action"]["expected_action"])
     for v in b["decide_body"]:
-        d = parse_decide_body(v["expected_body_text"].encode("utf-8"))
+        d = parse_decide_body(v["expected_body_text"].encode("utf-8"), AGENT)
         assert d.decision == v["decision"] and d.key_level == v["key_level"]
         assert d.id == QUESTION.id and d.action == QUESTION.action
         assert d.question_sha256 == question_sha256(QUESTION.text)
@@ -114,7 +115,7 @@ def test_core_vector(core: Core, v: dict[str, Any]) -> None:
     assert r.status_code == 200, r.text
     doc = r.json()
     check_response("/v1/friend/decide", "post", 200, doc)
-    decision = parse_decide_body(body)
+    decision = parse_decide_body(body, AGENT)
     assert doc["id"] == expect["spool_id"]
     assert doc["question_id"] == QUESTION.id and doc["decision"] == decision.decision
     assert [p.stem for p in spooled] == [expect["spool_id"]]
@@ -185,7 +186,7 @@ def test_questions_endpoint_and_rows(env: Any) -> None:
         {
             "id": q.id,
             "title": "Resume the agent?",
-            "subtitle": "Friend asks · Bash",
+            "subtitle": "Agent-Alpha asks · Bash",
             "status": {"state": "warn", "text": "waiting"},
             "at": q.asked_at,
         }
@@ -203,7 +204,7 @@ def decide_body(
         "decision": decision,
         "id": q.id,
         "question_sha256": digest if digest is not None else question_sha256(q.text),
-        "to": "Friend",
+        "to": AGENT,
     }
     return json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
@@ -215,6 +216,7 @@ def friend_cfg(core: Core, tmp: Path, *, window: int = 120) -> FriendConfig:
     project.mkdir(exist_ok=True)
     return from_dict(
         {
+            "agent": AGENT,
             "project_dir": str(project),
             "inbox_dir": str(core.config.inbox_dir),
             "devices_file": str(core.config.devices_path),
@@ -426,6 +428,7 @@ def verifier_config(tmp: Path) -> FriendConfig:
     devices.write_text(FRIEND["devices"]["valid"], encoding="utf-8")
     return from_dict(
         {
+            "agent": AGENT,
             "project_dir": str(tmp / "project"),
             "inbox_dir": str(inbox),
             "devices_file": str(devices),
@@ -685,6 +688,7 @@ def write_toml(cfg: FriendConfig, path: Path, *, rules: bool = True) -> None:
     lines = [
         f"{k} = {json.dumps(str(val))}"
         for k, val in (
+            ("agent", cfg.agent),
             ("project_dir", cfg.project_dir),
             ("inbox_dir", cfg.inbox_dir),
             ("devices_file", cfg.devices_file),
@@ -939,6 +943,7 @@ def test_ask_cli_without_core(tmp_path: Path, capsys: Any) -> None:
 def test_gate_config_rejects_bad_rules(tmp_path: Path) -> None:
     base = verifier_config(tmp_path)
     good: dict[str, Any] = {
+        "agent": AGENT,
         "project_dir": str(base.project_dir),
         "inbox_dir": str(base.inbox_dir),
         "devices_file": str(base.devices_file),
@@ -1057,15 +1062,13 @@ def test_rhcore_friend_config_includes_the_gate(short_dir: Path, tmp_path: Path)
     out = io.StringIO()
     import argparse
 
-    args = argparse.Namespace(
-        config=toml, project=tmp_path / "proj", tmux="tmux", target="friend", decide_window=120
-    )
+    args = argparse.Namespace(config=toml, project=None, tmux="tmux", owner_names="owner")
     assert rhcore._friend_config(args, out) == 0
     cfg = from_dict(tomllib.loads(out.getvalue()))
     assert cfg.gate is not None
     assert cfg.gate.admin_socket == core.config.admin_socket
     assert cfg.gate.decide_window_s == 120 and cfg.gate.log == (
-        tmp_path / "proj" / "log" / "rh_gate.jsonl"
+        core.config.ch.project_dir / "log" / "rh_gate.jsonl"
     )
     assert [r.name for r in cfg.gate.protected] == [r.name for r in default_rules()]
     assert gate.protected_by(cfg.gate.protected, "Bash", {"command": "kill -CONT 1"})
@@ -1076,7 +1079,7 @@ def test_store_spends_a_decision_once() -> None:
     from rh_core.store import Store
 
     s = Store(":memory:")
-    s.add_question(QUESTION)
+    s.add_question(QUESTION, agent=AGENT)
     row = DecisionRow(
         id="b" * 32,
         question_id=QUESTION.id,
@@ -1294,34 +1297,49 @@ def test_admin_socket_takes_the_longest_action_the_contract_allows(env: Any) -> 
 
 def test_log_feed_shows_friend_events(tmp_path: Path) -> None:
     journal = Journal(tmp_path)
-    journal.append("friend.message", device="a" * 32, id="b" * 32)
-    journal.append("friend.question", id="q" * 32)
+    journal.append("friend.message", agent=AGENT, device="a" * 32, id="b" * 32)
+    journal.append("friend.question", agent=AGENT, id="q" * 32)
     journal.append(
         "friend.decision",
+        agent=AGENT,
         device="a" * 32,
         id="d" * 32,
         question_id="q" * 32,
         decision="allow",
         key="critical",
     )
-    journal.append("friend.decision.used", id="d" * 32, question_id="q" * 32)
-    journal.append("friend.decision.refused", id="d" * 32, reason="already_used")
-    journal.append("friend.question.withdrawn", id="q" * 32)
-    journal.append("friend.decision.voided", id="d" * 32, reason="denied", by="deny:" + "e" * 32)
-    journal.append("friend.question.refused", reason="action is longer than 65536 characters")
+    journal.append("friend.decision.used", agent=AGENT, id="d" * 32, question_id="q" * 32)
+    journal.append("friend.decision.refused", agent=AGENT, id="d" * 32, reason="already_used")
+    journal.append("friend.question.withdrawn", agent=AGENT, id="q" * 32)
+    journal.append(
+        "friend.decision.voided", agent=AGENT, id="d" * 32, reason="denied", by="deny:" + "e" * 32
+    )
+    journal.append(
+        "friend.question.refused", agent=AGENT, reason="action is longer than 65536 characters"
+    )
+    journal.append("friend.question", id="r" * 32)  # written before records named the agent
+    journal.append(
+        "friend.channel.changed",
+        **{"from": AGENT, "to": "Agent-Beta"},
+        withdrawn=["q" * 32],
+        voided=[],
+    )
     entries, _ = logfeed.page(tmp_path, names=lambda d: "Мой iPhone")
     assert [(e["kind"], e["title"]) for e in reversed(entries)] == [
-        ("system", "Message to Friend from Мой iPhone"),
-        ("approval", "Friend asks for a decision"),
-        ("approval", "Allowed Friend's action (Мой iPhone)"),
-        ("approval", "Friend used a decision"),
-        ("approval", "Friend's decision refused: already_used"),
-        ("approval", "Friend withdrew a question"),
-        ("approval", "Friend's allow superseded: denied"),
-        ("approval", "Friend's question refused"),
+        ("system", "Message to Agent-Alpha from Мой iPhone"),
+        ("approval", "Agent-Alpha asks for a decision"),
+        ("approval", "Allowed Agent-Alpha's action (Мой iPhone)"),
+        ("approval", "Agent-Alpha used a decision"),
+        ("approval", "Agent-Alpha's decision refused: already_used"),
+        ("approval", "Agent-Alpha withdrew a question"),
+        ("approval", "Agent-Alpha's allow superseded: denied"),
+        ("approval", "Agent-Alpha's question refused"),
+        ("approval", "the agent asks for a decision"),
+        ("system", "Channel agent changed: Agent-Alpha → Agent-Beta"),
     ]
+    assert entries[0]["detail"] == "1 question(s) withdrawn, 0 allow(s) voided"
     approvals, _ = logfeed.page(tmp_path, names=lambda d: None, filter="approvals")
-    assert len(approvals) == 7
+    assert len(approvals) == 8
 
 
 def test_admin_socket_friend_commands_validate(env: Any) -> None:

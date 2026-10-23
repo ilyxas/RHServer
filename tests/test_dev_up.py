@@ -380,7 +380,7 @@ def test_fixture_feeds_home(short_dir: Path) -> None:
     assert values["sys.cpu"]["value"] == 38.4
     assert values["sys.disk_free"]["value"] == 112_400_000_000
     assert [row["id"] for row in values["agents.status"]["value"]] == [
-        "Friend",
+        "Agent-Omega",
         "Agent-Alpha",
         "Agent-Beta",
         "RemoteHands",

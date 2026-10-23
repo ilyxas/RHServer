@@ -1,4 +1,4 @@
-"""rhcore: run and manage rh-core (pairing, devices, journal, dev mode)."""
+"""rhcore: run and manage rh-core (pairing, devices, journal, channel, dev mode)."""
 
 from __future__ import annotations
 
@@ -73,26 +73,58 @@ def main(argv: list[str] | None = None) -> int:
 
     fc = with_config(
         sub.add_parser(
-            "friend-config", help="print a friend.toml for the Friend verifier and bridge"
+            "friend-config",
+            help="print the agent-side config (verifier, bridge, gate) for the core's [channel]",
         )
     )
-    fc.add_argument("--project", type=Path, required=True, help="the Friend project folder")
-    fc.add_argument("--tmux", default="tmux", help="path to tmux (default: tmux)")
-    fc.add_argument("--target", default="friend", help="tmux target (default: friend)")
     fc.add_argument(
-        "--decide-window",
-        type=int,
-        default=120,
-        metavar="SECONDS",
-        help="how old an allow decision may be when the gate uses it (default: 120)",
+        "--project",
+        type=Path,
+        help="the agent's project folder; must be [channel] project_dir (a check only)",
     )
+    fc.add_argument("--tmux", default="tmux", help="path to tmux (default: tmux)")
     fc.add_argument(
         "--owner-names",
         default="owner|владелец",
         metavar="REGEX",
         help="how records name the owner, as a regex alternation for the CGC rule "
-        '(default: "owner|владелец"); the name stays in your friend.toml only',
+        '(default: "owner|владелец"); the name stays in your agent-side config only',
     )
+
+    chn = sub.add_parser("channel", help="the agent on the channel")
+    chn_cmds = chn.add_subparsers(dest="channel_command", metavar="COMMAND", required=True)
+    cs = with_config(
+        chn_cmds.add_parser(
+            "set",
+            help="switch the channel agent: configs, core restart, check (docs/friend-gate.md)",
+        )
+    )
+    cs.add_argument("--agent", required=True, help="the agent's id, as in the team file")
+    cs.add_argument("--project", type=Path, required=True, help="the agent's project folder")
+    cs.add_argument("--target", required=True, help="tmux session the bridge types into")
+    cs.add_argument(
+        "--core-label",
+        default=os.environ.get("RH_CORE_LABEL"),
+        help="launchd label of the core (default: $RH_CORE_LABEL)",
+    )
+    cs.add_argument(
+        "--bridge-label",
+        default=os.environ.get("RH_BRIDGE_LABEL"),
+        help="launchd label of the bridge, restarted after the core (default: $RH_BRIDGE_LABEL)",
+    )
+    cs.add_argument(
+        "--agent-config",
+        type=Path,
+        help="agent-side config to write (default: friend.toml next to the core config)",
+    )
+    cs.add_argument("--tmux", help="path to tmux (default: as in the agent-side config)")
+    cs.add_argument(
+        "--owner-names",
+        metavar="REGEX",
+        help="write the default gate rules with these owner names; without it the "
+        "[[gate.protected]] rules of the current agent-side config are kept as they are",
+    )
+    cs.add_argument("--timeout", type=float, default=30.0, metavar="SECONDS")
 
     args = p.parse_args(argv)
     try:
@@ -110,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
             return _journal_verify(args)
         if args.command == "friend-config":
             return _friend_config(args, sys.stdout)
+        if args.command == "channel":
+            return _channel_set(args)
     except (ConfigError, AdminUnavailable) as e:
         print(f"rhcore: {e}", file=sys.stderr)
         return 2
@@ -121,62 +155,45 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _friend_config(args: argparse.Namespace, out: TextIO) -> int:
-    """friend.toml with the core's public key pinned, its friend paths and the gate rules."""
-    from rh_common.crypto import b64e, public_x963
-    from rh_core import keys
-    from rh_friend.config import default_protected
+    """The agent-side config for the core's [channel], core key pinned, default gate rules."""
+    from rh_cli.channel import agent_config_text
 
     cfg = _config(args)
-    if not cfg.key_path.exists():
-        raise ConfigError(f"no core key at {cfg.key_path}: start the core once first")
-    core_pub = public_x963(keys.load_or_create(cfg.key_path))
-    project = args.project.expanduser().resolve()
-
-    def q(value: object) -> str:
-        return json.dumps(str(value), ensure_ascii=False)
-
-    lines = [
-        f"project_dir = {q(project)}",
-        f"inbox_dir = {q(cfg.inbox_dir)}",
-        f"devices_file = {q(cfg.devices_path)}",
-        f"core_key = {q(b64e(core_pub))}",
-        f"seen_file = {q(project / 'state' / 'rh_seen.jsonl')}",
-        f"rejected_log = {q(project / 'log' / 'rh_rejected.jsonl')}",
-        "window_s = 900",
-        'owner_label = "owner"',
-        "",
-        "[bridge]",
-        f"tmux = {q(args.tmux)}",
-        f"target = {q(args.target)}",
-        f"state_file = {q(project / 'state' / 'rh_bridge.json')}",
-        "",
-        "# PreToolUse gate (rh-friend-gate): a protected call needs a fresh allow decision",
-        "# from the phone for exactly that call. Any matching rule protects the call.",
-        "[gate]",
-        f"admin_socket = {q(cfg.admin_socket)}",
-        f"decide_window_s = {int(getattr(args, 'decide_window', 120))}",
-        f"log = {q(project / 'log' / 'rh_gate.jsonl')}",
-        f"ask = {q(Path(sys.argv[0]).resolve().parent / 'rh-friend-ask')}",
-    ]
-    for rule in default_protected(getattr(args, "owner_names", "owner|владелец")):
-        lines += ["", "[[gate.protected]]", f"name = {q(rule['name'])}"]
-        lines.append(f"tools = [{', '.join(q(t) for t in rule['tools'])}]")
-        if rule.get("field"):
-            lines.append(f"field = {q(rule['field'])}")
-        lines.append("match = [")
-        lines += [f"  {_toml_literal(m)}," for m in rule["match"]]
-        lines.append("]")
-        if rule.get("ignore_case"):
-            lines.append("ignore_case = true")
-    out.write("\n".join(lines) + "\n")
+    ch = cfg.ch
+    if args.project is not None and args.project.expanduser().resolve() != ch.project_dir.resolve():
+        raise ConfigError(
+            f"--project {args.project} is not [channel] project_dir {ch.project_dir}; "
+            "switch the agent with `rhcore channel set`"
+        )
+    out.write(
+        agent_config_text(
+            cfg,
+            tmux=args.tmux,
+            ask=Path(sys.argv[0]).resolve().parent / "rh-friend-ask",
+            owner_names=args.owner_names,
+        )
+    )
     return 0
 
 
-def _toml_literal(regex: str) -> str:
-    """A regex as a TOML literal string (no escaping) when it has no single quote."""
-    if "'" not in regex and "\n" not in regex:
-        return f"'{regex}'"
-    return json.dumps(regex, ensure_ascii=False)
+def _channel_set(args: argparse.Namespace) -> int:
+    from rh_cli.channel import SetRequest, channel_set
+
+    if not args.core_label:
+        raise ConfigError("--core-label (or $RH_CORE_LABEL) is required: the core is restarted")
+    req = SetRequest(
+        config_path=args.config,
+        agent=args.agent,
+        project_dir=args.project,
+        target=args.target,
+        agent_config=args.agent_config or args.config.parent / "friend.toml",
+        core_label=args.core_label,
+        bridge_label=args.bridge_label,
+        tmux=args.tmux,
+        owner_names=args.owner_names,
+        timeout_s=args.timeout,
+    )
+    return channel_set(req, out=sys.stdout, status=lambda cfg: _call(cfg, {"cmd": "status"}))
 
 
 def _config(args: argparse.Namespace) -> Config:
@@ -292,6 +309,7 @@ def _call(cfg: Config, msg: dict[str, Any]) -> dict[str, Any]:
 def _status(cfg: Config) -> int:
     r = _call(cfg, {"cmd": "status"})
     print(f"{r['mac_name']}: {r['mode']}, {r['url']}, время ядра {r['server_time']}")
+    print(f"канал: {r['channel']['agent']}")
     return 0
 
 

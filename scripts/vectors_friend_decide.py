@@ -1,6 +1,6 @@
 """friend.decide / friend.questions vectors: the question hash and decide body the phone
 builds, core acceptance against the stage 1 fixture plus one open question, the
-envelopes the Friend verifier must pass or block, and the cases the Friend gate must
+envelopes the agent-side verifier must pass or block, and the cases the gate must
 allow or block.
 
 Imported by gen_vectors.py. Keys, devices and nonces are the stage 1 fixture
@@ -57,7 +57,7 @@ def body(
     qid: str = QUESTION_ID,
     digest: str | None = None,
     action: str = ACTION,
-    to: str = "Friend",
+    to: str = f.AGENT,
 ) -> bytes:
     """The phone's encoding: sorted keys, no spaces, UTF-8 as is."""
     doc = {
@@ -119,7 +119,7 @@ def core_cases() -> list[tuple[str, tuple[dict[str, str], bytes], str | None]]:
         ("question-hash-mismatch", signed(body_bytes=body(digest=tampered_hash)), "bad_request"),
         ("action-mismatch", signed(body_bytes=body(action=OTHER_ACTION)), "bad_request"),
         ("bad-decision", signed(body_bytes=body(decision="maybe"), level="normal"), "bad_request"),
-        ("wrong-recipient", signed(body_bytes=body(to="RemoteHands")), "bad_request"),
+        ("wrong-recipient", signed(body_bytes=body(to=f.OTHER_AGENT)), "bad_request"),
         (
             "extra-field",
             signed(body_bytes=body()[:-1] + b',"x":1}'),
@@ -159,7 +159,7 @@ def evaluate_core(headers: dict[str, str], raw: bytes) -> str | None:
     if verdict.error is not None:
         return verdict.error.code
     try:
-        decision = parse_decide_body(raw)
+        decision = parse_decide_body(raw, f.AGENT)
     except ValueError:
         return "bad_request"
     if decision.key_level != key:
@@ -207,6 +207,8 @@ def envelope_cases() -> list[dict[str, Any]]:
     add("bad-decision", _envelope(h, b), "bad_body")
     add("expired-for-delivery", _envelope(ok_h, ok_b), "too_old", now="now+16m")
     add("pointer-mismatch", _envelope(ok_h, ok_b), "pointer_mismatch", sid="0" * 32)
+    h, b = signed(body_bytes=body(to=f.OTHER_AGENT))
+    add("wrong-recipient", _envelope(h, b), "wrong_recipient")
     return cases
 
 
@@ -229,6 +231,7 @@ def evaluate_envelope(case: dict[str, Any], devices_doc: str) -> str | None:
             now=NOWS[case["now"]],
             window=VERIFY_WINDOW,
             seen=lambda nonce: False,
+            agent=f.AGENT,
         )
     except Reject as e:
         return e.code
@@ -479,6 +482,7 @@ def evaluate_gate(case: dict[str, Any], devices_doc: str, inbox: Any) -> dict[st
     devices = inbox / "devices.json"
     devices.write_text(devices_doc, encoding="utf-8")
     cfg = FriendConfig(
+        agent=f.AGENT,
         project_dir=inbox,
         inbox_dir=inbox,
         devices_file=devices,
@@ -552,7 +556,7 @@ def friend_decide_vectors() -> dict[str, Any]:
         env: Envelope = case["envelope"]
         decision: FriendDecision | None = None
         if case["expect"] is None:
-            decision = parse_decide_body(env.body)
+            decision = parse_decide_body(env.body, f.AGENT)
         envelopes.append(
             {
                 "name": case["name"],
@@ -596,7 +600,7 @@ def friend_decide_vectors() -> dict[str, Any]:
             "sorted keys and no spaces, and the key level each decision needs. core: "
             "requests against the signed_requests.json fixture with the one open `question`; "
             "accept spools the request under spool_id = first 32 hex of sha256(nonce). "
-            "envelopes: what the Friend verifier must pass or block for a pointer at `now` "
+            "envelopes: what the agent-side verifier must pass or block for a pointer at `now` "
             f"with a {int(VERIFY_WINDOW.total_seconds())} s window (device list: friend.json "
             '"valid"). gate: a tool call, the decide envelopes in the inbox, the decisions the '
             "core accepted (with `used`; null core = unreachable) and the clock → allow with "
@@ -606,7 +610,8 @@ def friend_decide_vectors() -> dict[str, Any]:
             "signed ts counts (a deny wins a tie): a deny blocks even when an older unused "
             "allow is present."
         ),
-        "version": 2,
+        "version": 3,
+        "agent": f.AGENT,
         "core_pub_x963_b64": b64e(t.pub("core")),
         "verify_window_s": int(VERIFY_WINDOW.total_seconds()),
         "decide_window_s": int(DECIDE_WINDOW.total_seconds()),
