@@ -1,4 +1,5 @@
-"""SQLite registry of rh-core: devices and nonces (SPEC §5.1).
+"""SQLite registry of rh-core: devices, nonces (SPEC §5.1), Friend questions and
+decisions (friend slice 2).
 
 Later stages add tables (action_id, data_id, approvals, quick access) as new
 migrations; existing ones are never edited.
@@ -16,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from rh_common.crypto import b64e
+from rh_common.friend import Question
 from rh_common.protocol import NONCE_TTL, Device, NonceRecord, fingerprint, format_ts, parse_ts
 
 MIGRATIONS: list[str] = [
@@ -40,7 +42,55 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX nonces_expires ON nonces (expires);
     """,
+    # friend slice 2: questions Friend asks the owner, and the signed decisions that answer
+    # them. A decision is spent once (used_at); the gate asks over the admin socket.
+    """
+    CREATE TABLE friend_questions (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        action TEXT NOT NULL,
+        asked_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'answered', 'withdrawn')),
+        decision_id TEXT,
+        closed_at TEXT
+    );
+    CREATE TABLE friend_decisions (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL,
+        device TEXT NOT NULL,
+        key TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+        question_sha256 TEXT NOT NULL,
+        action TEXT NOT NULL,
+        signed_at TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        used_at TEXT
+    );
+    """,
+    # friend slice 2, last round: a deny or a new question about the same action voids the
+    # unused allows for it (the newest decision counts). voided_by: "deny:<id>" or
+    # "question:<id>".
+    """
+    ALTER TABLE friend_decisions ADD COLUMN voided_at TEXT;
+    ALTER TABLE friend_decisions ADD COLUMN voided_by TEXT
+    """,
 ]
+
+
+@dataclass(frozen=True)
+class DecisionRow:
+    id: str  # spool id of the envelope
+    question_id: str
+    device: str
+    key: str
+    decision: str
+    question_sha256: str
+    action: str
+    signed_at: str
+    accepted_at: str
+    used_at: str | None
+    voided_at: str | None = None
+    voided_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +263,153 @@ class Store:
         """For tests and vector fixtures."""
         with self._tx() as db:
             db.execute("UPDATE devices SET status = ? WHERE id = ?", (status, device_id))
+
+    # --- Friend questions and decisions ---------------------------------------
+
+    def add_question(self, question: Question) -> None:
+        with self._tx() as db:
+            db.execute(
+                "INSERT INTO friend_questions (id, text, action, asked_at, status)"
+                " VALUES (?, ?, ?, ?, 'open')",
+                (question.id, question.text, question.action, question.asked_at),
+            )
+
+    def question(self, question_id: str) -> tuple[Question, str] | None:
+        """The question and its status, or None."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM friend_questions WHERE id = ?", (question_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return _question(row), str(row["status"])
+
+    def open_questions(self) -> list[Question]:
+        """Oldest first: the order the phone shows them."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM friend_questions WHERE status = 'open' ORDER BY asked_at, id"
+            ).fetchall()
+        return [_question(r) for r in rows]
+
+    def withdraw_question(self, question_id: str, *, now: datetime) -> bool:
+        """Close an open question without a decision; False if it is not open."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE friend_questions SET status = 'withdrawn', closed_at = ?"
+                " WHERE id = ? AND status = 'open'",
+                (format_ts(now), question_id),
+            )
+            return cur.rowcount == 1
+
+    def answer_question(self, decision: DecisionRow) -> bool:
+        """Record a decision and close its question in one transaction.
+
+        False if the question is not open any more (a second answer loses)."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE friend_questions SET status = 'answered', decision_id = ?, closed_at = ?"
+                " WHERE id = ? AND status = 'open'",
+                (decision.id, decision.accepted_at, decision.question_id),
+            )
+            if cur.rowcount != 1:
+                return False
+            db.execute(
+                "INSERT INTO friend_decisions (id, question_id, device, key, decision,"
+                " question_sha256, action, signed_at, accepted_at, used_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                (
+                    decision.id,
+                    decision.question_id,
+                    decision.device,
+                    decision.key,
+                    decision.decision,
+                    decision.question_sha256,
+                    decision.action,
+                    decision.signed_at,
+                    decision.accepted_at,
+                ),
+            )
+            return True
+
+    def decision(self, decision_id: str) -> DecisionRow | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM friend_decisions WHERE id = ?", (decision_id,)
+            ).fetchone()
+        return _decision(row) if row else None
+
+    def use_decision(self, decision_id: str, *, now: datetime) -> bool:
+        """Spend a decision; False if it was already spent or voided (the first use wins)."""
+        with self._tx() as db:
+            cur = db.execute(
+                "UPDATE friend_decisions SET used_at = ? WHERE id = ?"
+                " AND used_at IS NULL AND voided_at IS NULL",
+                (format_ts(now), decision_id),
+            )
+            return cur.rowcount == 1
+
+    def void_unused_allows(
+        self, action: str, *, now: datetime, by: str, keep: str | None = None
+    ) -> list[str]:
+        """Void every unused, unvoided allow for this action (a deny or a new question
+        supersedes them); `keep` is a decision id to leave alone. Returns the ids voided."""
+        with self._tx() as db:
+            rows = db.execute(
+                "SELECT id FROM friend_decisions WHERE action = ? AND decision = 'allow'"
+                " AND used_at IS NULL AND voided_at IS NULL AND id IS NOT ?"
+                " ORDER BY accepted_at, id",
+                (action, keep),
+            ).fetchall()
+            ids = [row["id"] for row in rows]
+            for decision_id in ids:
+                db.execute(
+                    "UPDATE friend_decisions SET voided_at = ?, voided_by = ? WHERE id = ?",
+                    (format_ts(now), by, decision_id),
+                )
+            return ids
+
+    def put_decision(self, decision: DecisionRow) -> None:
+        """For tests and vector fixtures: a decision row as is (used or not)."""
+        with self._tx() as db:
+            db.execute(
+                "INSERT INTO friend_decisions (id, question_id, device, key, decision,"
+                " question_sha256, action, signed_at, accepted_at, used_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    decision.id,
+                    decision.question_id,
+                    decision.device,
+                    decision.key,
+                    decision.decision,
+                    decision.question_sha256,
+                    decision.action,
+                    decision.signed_at,
+                    decision.accepted_at,
+                    decision.used_at,
+                ),
+            )
+
+
+def _question(row: sqlite3.Row) -> Question:
+    return Question(id=row["id"], text=row["text"], action=row["action"], asked_at=row["asked_at"])
+
+
+def _decision(row: sqlite3.Row) -> DecisionRow:
+    return DecisionRow(
+        id=row["id"],
+        question_id=row["question_id"],
+        device=row["device"],
+        key=row["key"],
+        decision=row["decision"],
+        question_sha256=row["question_sha256"],
+        action=row["action"],
+        signed_at=row["signed_at"],
+        accepted_at=row["accepted_at"],
+        used_at=row["used_at"],
+        voided_at=row["voided_at"],
+        voided_by=row["voided_by"],
+    )
 
 
 def _row(row: sqlite3.Row) -> DeviceRow:

@@ -34,9 +34,13 @@ def test_every_operation_has_op_and_key_level() -> None:
         for method, op in item.items():
             if method in {"get", "post", "put", "delete", "patch"}:
                 assert op.get("x-rh-op"), f"{method} {path}: missing x-rh-op"
-                assert op.get("x-rh-key") in {"normal", "critical", "none", "normal+critical"}, (
-                    f"{method} {path}"
-                )
+                assert op.get("x-rh-key") in {
+                    "normal",
+                    "critical",
+                    "none",
+                    "normal+critical",
+                    "normal|critical",  # the body picks the level (friend.decide)
+                }, f"{method} {path}"
 
 
 def test_vectors_match_generator() -> None:

@@ -19,20 +19,44 @@ from here; nothing about a particular Mac or person is built in.
     tmux   = "/opt/homebrew/bin/tmux"
     target = "friend"                            # tmux target (session or session:window.pane)
     state_file = "~/Friend/state/rh_bridge.json"
+
+    [gate]                                       # PreToolUse gate (rh-friend-gate)
+    admin_socket = "<core data_dir>/admin.sock"  # where decisions are spent, once each
+    decide_window_s = 120                        # how old an allow decision may be
+    log = "~/Friend/log/rh_gate.jsonl"           # every verdict on a protected call
+    ask = "<venv>/bin/rh-friend-ask"             # a plain call of this program is never
+                                                 # protected (asking must not need an answer)
+
+    [[gate.protected]]                           # any matching rule makes a call protected
+    name  = "resume or pause a process"
+    tools = ["Bash"]                             # tool names; ["*"] for any tool
+    field = "command"                            # a key of tool_input; omit for the whole input
+    match = ["<regex>", ...]                     # all must be found (re.search; DOTALL,
+                                                 # MULTILINE)
+    ignore_case = false
+
+The rules are a seat belt, not a sandbox: they catch the obvious spelling of a protected
+action so the owner is asked. Another spelling, a script or Python can do the same thing
+under the same user; the honest guarantee comes with separate users (stage 7), when the
+core does the dangerous actions under its own user on a signed decision.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import json
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from rh_common.crypto import b64d, load_public_x963
+from rh_common.jcs import JCSError, canonicalize
 
 DEFAULT_PATH = Path("~/Library/Application Support/RemoteHands/friend.toml").expanduser()
 DEFAULT_WINDOW_S = 900
+DEFAULT_DECIDE_WINDOW_S = 120  # an allow decision is good for two minutes
 MAX_FUTURE_S = 120  # same clock tolerance as the core
 
 
@@ -48,6 +72,41 @@ class BridgeConfig:
 
 
 @dataclass(frozen=True)
+class ProtectedRule:
+    """A tool call is protected when its tool is listed and every regex is found in the
+    chosen field of tool_input (or in the canonical JSON of the whole input)."""
+
+    name: str
+    tools: tuple[str, ...]  # exact tool names, or ("*",)
+    match: tuple[re.Pattern[str], ...]
+    field: str | None = None
+
+    def applies(self, tool_name: str, tool_input: Any) -> bool:
+        if "*" not in self.tools and tool_name not in self.tools:
+            return False
+        if self.field is None:
+            try:
+                hay = canonicalize(tool_input).decode("utf-8")
+            except (JCSError, TypeError, ValueError):
+                hay = json.dumps(tool_input, ensure_ascii=False, sort_keys=True, default=str)
+        else:
+            if not isinstance(tool_input, dict) or self.field not in tool_input:
+                return False
+            value = tool_input[self.field]
+            hay = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return all(p.search(hay) for p in self.match)
+
+
+@dataclass(frozen=True)
+class GateConfig:
+    admin_socket: Path
+    protected: tuple[ProtectedRule, ...]
+    decide_window_s: int = DEFAULT_DECIDE_WINDOW_S
+    log: Path | None = None
+    ask: Path | None = None  # rh-friend-ask; None: the one next to this interpreter
+
+
+@dataclass(frozen=True)
 class FriendConfig:
     project_dir: Path
     inbox_dir: Path
@@ -58,6 +117,7 @@ class FriendConfig:
     window_s: int = DEFAULT_WINDOW_S
     owner_label: str = "owner"
     bridge: BridgeConfig | None = None
+    gate: GateConfig | None = None
     require_protected: bool = False  # managed install: anchors not writable by the hook's user
     source: Path | None = None  # the file this config was read from
 
@@ -72,6 +132,7 @@ _TOP = {
     "window_s",
     "owner_label",
     "bridge",
+    "gate",
     "require_protected",
 }
 _REQUIRED = ("project_dir", "inbox_dir", "devices_file", "core_key", "seen_file", "rejected_log")
@@ -122,6 +183,7 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
         window_s=window,
         owner_label=label,
         bridge=_bridge(doc["bridge"], path) if "bridge" in doc else None,
+        gate=_gate(doc["gate"], path) if "gate" in doc else None,
         require_protected=protected,
     )
 
@@ -139,3 +201,146 @@ def _bridge(table: Any, path: Any) -> BridgeConfig:
     if not isinstance(tmux, str) or not tmux:
         raise ConfigError("[bridge] tmux must be a string")
     return BridgeConfig(tmux=tmux, target=table["target"], state_file=path(table["state_file"]))
+
+
+def _gate(table: Any, path: Any) -> GateConfig:
+    if not isinstance(table, dict):
+        raise ConfigError("[gate] must be a table")
+    unknown = set(table) - {"admin_socket", "decide_window_s", "log", "protected", "ask"}
+    if unknown:
+        raise ConfigError(f"unknown [gate] keys: {sorted(unknown)}")
+    if not isinstance(table.get("admin_socket"), str) or not table["admin_socket"]:
+        raise ConfigError("[gate] admin_socket is required")
+    window = table.get("decide_window_s", DEFAULT_DECIDE_WINDOW_S)
+    if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+        raise ConfigError("[gate] decide_window_s must be a positive integer (seconds)")
+    log = table.get("log")
+    if log is not None and (not isinstance(log, str) or not log):
+        raise ConfigError("[gate] log must be a path")
+    ask = table.get("ask")
+    if ask is not None and (not isinstance(ask, str) or not ask):
+        raise ConfigError("[gate] ask must be a path")
+    rules = table.get("protected", [])
+    if not isinstance(rules, list):
+        raise ConfigError("[[gate.protected]] must be an array of tables")
+    return GateConfig(
+        admin_socket=path(table["admin_socket"]),
+        decide_window_s=window,
+        log=path(log) if log else None,
+        ask=path(ask) if ask else None,
+        protected=tuple(_rule(r) for r in rules),
+    )
+
+
+def _rule(doc: Any) -> ProtectedRule:
+    if not isinstance(doc, dict):
+        raise ConfigError("[[gate.protected]] entries must be tables")
+    where = f"[[gate.protected]] {doc.get('name', '?')}"
+    unknown = set(doc) - {"name", "tools", "field", "match", "ignore_case"}
+    if unknown:
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
+    name = doc.get("name")
+    if not isinstance(name, str) or not name:
+        raise ConfigError(f"{where}: name is required")
+    tools = doc.get("tools")
+    if not isinstance(tools, list) or not tools or not all(isinstance(t, str) and t for t in tools):
+        raise ConfigError(f"{where}: tools must be a non-empty list of tool names")
+    field = doc.get("field")
+    if field is not None and (not isinstance(field, str) or not field):
+        raise ConfigError(f"{where}: field must be a non-empty string")
+    patterns = doc.get("match")
+    if not isinstance(patterns, list) or not patterns:
+        raise ConfigError(f"{where}: match must be a non-empty list of regular expressions")
+    ignore_case = doc.get("ignore_case", False)
+    if not isinstance(ignore_case, bool):
+        raise ConfigError(f"{where}: ignore_case must be true or false")
+    flags = re.DOTALL | re.MULTILINE | (re.IGNORECASE if ignore_case else 0)
+    compiled = []
+    for pattern in patterns:
+        if not isinstance(pattern, str) or not pattern:
+            raise ConfigError(f"{where}: match entries must be non-empty strings")
+        try:
+            compiled.append(re.compile(pattern, flags))
+        except re.error as e:
+            raise ConfigError(f"{where}: bad regex {pattern!r}: {e}") from e
+    return ProtectedRule(name=name, tools=tuple(tools), match=tuple(compiled), field=field)
+
+
+# Rules `rhcore friend-config` writes; the owner edits the file afterwards. They match the
+# usual spellings, including the ones a review found slipping through (a path before kill,
+# `command kill`, `bash -c "kill …"`, `xargs kill`, `kill -s 19`, os.kill in Python). What
+# they do not catch is listed in docs/friend-gate.md, "Known limitations".
+DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
+    {
+        "name": "resume or pause a process (kill -CONT / -STOP)",
+        "tools": ["Bash"],
+        "field": "command",
+        # kill/pkill/killall anywhere (after a path, a quote, `command`, `xargs`, a newline),
+        # then CONT/STOP by name or number on the same command segment.
+        "match": [
+            r"(?<![\w.-])(kill|pkill|killall)\b[^\n;&|]*?"
+            r"(\s-(s\s+)?(SIG)?(CONT|STOP)\b|\s-(s\s+)?(17|18|19)\b)"
+        ],
+    },
+    {
+        "name": "resume or pause a process from a script (os.kill, SIGCONT, SIGSTOP)",
+        "tools": ["Bash"],
+        "field": "command",
+        "match": [
+            r"(os\.kill\s*\(|signal\.SIG(CONT|STOP)\b"
+            r"|[\"']kill[\"']\s*,\s*[\"']-(SIG)?(CONT|STOP|1[789])\b)"
+        ],
+    },
+    {
+        "name": "a record that the owner allowed something (CGC)",
+        "tools": ["Bash", "Write", "Edit", "MultiEdit"],
+        # {owner}: the owner's names as written in records, e.g. "owner|владелец";
+        # `rhcore friend-config --owner-names` fills it in, the file never names anyone here.
+        "match": [r"CGC", r"({owner})[^\"\n]{0,40}(разреш|одобр|allow|approv)"],
+        "ignore_case": True,
+    },
+    {
+        "name": "rules and access: edit a settings or rules file",
+        "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
+        "field": "file_path",
+        # The gate resolves file_path against the call's cwd first, so "CLAUDE.md" and
+        # "~/Friend/.claude/settings.json" are seen as full paths.
+        "match": [
+            r"((^|/)\.claude(/|$)|(^|/)CLAUDE\.md$|/LaunchAgents/|/LaunchDaemons/"
+            r"|managed-settings|(^|/)friend\.toml$|(^|/)core\.toml$|(^|/)\.ssh(/|$)"
+            r"|authorized_keys|/sudoers|(^|/)settings(\.local)?\.json$)"
+        ],
+    },
+    {
+        "name": "rules and access: change a settings or rules file from the shell",
+        "tools": ["Bash"],
+        "field": "command",
+        "match": [
+            r"(\.claude\b|CLAUDE\.md|LaunchAgents|LaunchDaemons|managed-settings"
+            r"|friend\.toml|core\.toml|\.ssh\b|authorized_keys|sudoers"
+            r"|settings(\.local)?\.json)",
+            r"(>|\btee\b|\bsed\s+-i|\bcp\b|\bmv\b|\brm\b|\bln\b|\bchmod\b|\bchown\b"
+            r"|\btruncate\b|\binstall\b|\bpatch\b"
+            r"|\blaunchctl\s+(load|unload|bootstrap|bootout|enable|disable|kickstart)"
+            r"|\bdefaults\s+write|\bpython3?\b|\bperl\b|\bruby\b|\bnode\b|\bswift\b"
+            r"|\bosascript\b|\b(ba|z)?sh\s+-c\b)",
+        ],
+    },
+)
+
+
+DEFAULT_OWNER_NAMES = "owner|владелец"
+
+
+def default_protected(owner_names: str = DEFAULT_OWNER_NAMES) -> list[dict[str, Any]]:
+    """The default rules with the owner's names (a regex alternation) filled in."""
+    out = []
+    for rule in DEFAULT_PROTECTED:
+        doc = dict(rule)
+        doc["match"] = [m.replace("{owner}", owner_names) for m in rule["match"]]
+        out.append(doc)
+    return out
+
+
+def default_rules(owner_names: str = DEFAULT_OWNER_NAMES) -> tuple[ProtectedRule, ...]:
+    return tuple(_rule(r) for r in default_protected(owner_names))

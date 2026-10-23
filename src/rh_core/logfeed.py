@@ -73,6 +73,9 @@ def kind_of(record: dict[str, Any], *, include_reads: bool = False) -> str | Non
         return "approval"
     if event.startswith("chat."):
         return "chat"
+    # friend.message stays kind system: the chat filter is the RemoteHands chat (stage 3).
+    if event.startswith("friend.question") or event.startswith("friend.decision"):
+        return "approval"  # the owner's decisions for Friend, like approvals for the agent
     if result in ("rejected", "error", "failed"):
         return "error"
     if event in ("request", "challenge"):
@@ -89,6 +92,10 @@ def kind_of(record: dict[str, Any], *, include_reads: bool = False) -> str | Non
 
 def _text(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def _short(value: Any) -> str:
+    return value[:8] if isinstance(value, str) else "?"
 
 
 def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
@@ -122,6 +129,26 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
         by = record.get("by")
         by_text = "from the terminal" if by == "terminal" else f"by {name(by)}"
         return f"Revoked {name(record.get('device'))}", by_text
+    if event == "friend.message":
+        return f"Message to Friend from {name(record.get('device'))}", None
+    if event == "friend.question":
+        return "Friend asks for a decision", f"question {_short(record.get('id'))}"
+    if event == "friend.question.withdrawn":
+        return "Friend withdrew a question", f"question {_short(record.get('id'))}"
+    if event == "friend.decision":
+        verb = "Allowed" if record.get("decision") == "allow" else "Denied"
+        return (
+            f"{verb} Friend's action ({name(record.get('device'))})",
+            f"question {_short(record.get('question_id'))}, decision {_short(record.get('id'))}",
+        )
+    if event == "friend.decision.voided":
+        return f"Friend's allow superseded: {reason}", f"decision {_short(record.get('id'))}"
+    if event == "friend.question.refused":
+        return "Friend's question refused", str(record.get("reason") or "")
+    if event == "friend.decision.used":
+        return "Friend used a decision", f"decision {_short(record.get('id'))}"
+    if event == "friend.decision.refused":
+        return f"Friend's decision refused: {reason}", f"decision {_short(record.get('id'))}"
     if event == "core.started":
         return "Core started", f"{record.get('mode')}, version {record.get('version')}"
     if event == "core.stopped":

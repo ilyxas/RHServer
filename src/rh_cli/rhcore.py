@@ -79,6 +79,20 @@ def main(argv: list[str] | None = None) -> int:
     fc.add_argument("--project", type=Path, required=True, help="the Friend project folder")
     fc.add_argument("--tmux", default="tmux", help="path to tmux (default: tmux)")
     fc.add_argument("--target", default="friend", help="tmux target (default: friend)")
+    fc.add_argument(
+        "--decide-window",
+        type=int,
+        default=120,
+        metavar="SECONDS",
+        help="how old an allow decision may be when the gate uses it (default: 120)",
+    )
+    fc.add_argument(
+        "--owner-names",
+        default="owner|владелец",
+        metavar="REGEX",
+        help="how records name the owner, as a regex alternation for the CGC rule "
+        '(default: "owner|владелец"); the name stays in your friend.toml only',
+    )
 
     args = p.parse_args(argv)
     try:
@@ -107,9 +121,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _friend_config(args: argparse.Namespace, out: TextIO) -> int:
-    """friend.toml with the core's public key pinned and its friend paths."""
+    """friend.toml with the core's public key pinned, its friend paths and the gate rules."""
     from rh_common.crypto import b64e, public_x963
     from rh_core import keys
+    from rh_friend.config import default_protected
 
     cfg = _config(args)
     if not cfg.key_path.exists():
@@ -134,9 +149,34 @@ def _friend_config(args: argparse.Namespace, out: TextIO) -> int:
         f"tmux = {q(args.tmux)}",
         f"target = {q(args.target)}",
         f"state_file = {q(project / 'state' / 'rh_bridge.json')}",
+        "",
+        "# PreToolUse gate (rh-friend-gate): a protected call needs a fresh allow decision",
+        "# from the phone for exactly that call. Any matching rule protects the call.",
+        "[gate]",
+        f"admin_socket = {q(cfg.admin_socket)}",
+        f"decide_window_s = {int(getattr(args, 'decide_window', 120))}",
+        f"log = {q(project / 'log' / 'rh_gate.jsonl')}",
+        f"ask = {q(Path(sys.argv[0]).resolve().parent / 'rh-friend-ask')}",
     ]
+    for rule in default_protected(getattr(args, "owner_names", "owner|владелец")):
+        lines += ["", "[[gate.protected]]", f"name = {q(rule['name'])}"]
+        lines.append(f"tools = [{', '.join(q(t) for t in rule['tools'])}]")
+        if rule.get("field"):
+            lines.append(f"field = {q(rule['field'])}")
+        lines.append("match = [")
+        lines += [f"  {_toml_literal(m)}," for m in rule["match"]]
+        lines.append("]")
+        if rule.get("ignore_case"):
+            lines.append("ignore_case = true")
     out.write("\n".join(lines) + "\n")
     return 0
+
+
+def _toml_literal(regex: str) -> str:
+    """A regex as a TOML literal string (no escaping) when it has no single quote."""
+    if "'" not in regex and "\n" not in regex:
+        return f"'{regex}'"
+    return json.dumps(regex, ensure_ascii=False)
 
 
 def _config(args: argparse.Namespace) -> Config:

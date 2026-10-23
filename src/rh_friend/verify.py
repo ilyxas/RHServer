@@ -5,8 +5,11 @@
 - The input is exactly a pointer `⟦rh:<id>⟧`: load the envelope the core spooled
   under that id and re-check the phone's signature against the device list signed
   by the pinned core key. Valid: the text goes to the model with the label
-  `[RH ✔ <owner> · <device> · <time>]`. Invalid: the input is blocked and the
-  reason appended to the rejected log.
+  `[RH ✔ <owner> · <device> · <time>]`; a decision (friend.decide) goes with the
+  label `[RH ✔ … · decide]`, its verdict and the exact action it names. Invalid:
+  the input is blocked and the reason appended to the rejected log.
+  A decision label is information for the model; what lets a protected action run
+  is the PreToolUse gate (rh_friend.gate), which checks the envelope again.
 - Any other input: the label `[unsigned]`. What the input says about itself does
   not matter: only this hook's own context carries a verdict, and every input gets one.
 - Outside the configured project the hook does nothing.
@@ -39,12 +42,16 @@ from typing import Any
 
 from rh_common.crypto import b64d, verify_der
 from rh_common.friend import (
+    KEY_FOR_DECISION,
+    OP_DECIDE,
     OP_SEND,
     POINTER_RE,
     DeviceEntry,
     Envelope,
+    FriendDecision,
     FriendMessage,
     parse_body,
+    parse_decide_body,
     parse_envelope,
     read_devices_doc,
     spool_id,
@@ -66,9 +73,10 @@ class Reject(Exception):
 
 @dataclass(frozen=True)
 class Verified:
-    message: FriendMessage
     device: DeviceEntry
     obj: SignedObject
+    message: FriendMessage | None = None  # friend.send
+    decision: FriendDecision | None = None  # friend.decide
 
 
 def check_envelope(
@@ -79,10 +87,16 @@ def check_envelope(
     now: datetime,
     window: timedelta,
     seen: Callable[[str], bool],
+    ops: tuple[str, ...] = (OP_SEND, OP_DECIDE),
 ) -> Verified:
-    """Order: malformed → pointer_mismatch → unknown_device → revoked_device →
-    op_mismatch → wrong_key_level → bad_signature → body_mismatch → bad_body →
-    too_old → from_future → replayed. Raises Reject."""
+    """Order for friend.send (unchanged since slice 1): malformed → pointer_mismatch →
+    unknown_device → revoked_device → op_mismatch → wrong_key_level → bad_signature →
+    body_mismatch → bad_body → too_old → from_future → replayed.
+
+    friend.decide names its key level in the body (allow: critical, deny: normal), so
+    the signature is checked with the key the object names and the level with the
+    body: … → op_mismatch → bad_signature → body_mismatch → bad_body →
+    wrong_key_level → too_old → from_future → replayed. Raises Reject."""
     try:
         obj, raw = parse_auth(envelope.auth)
         sig = b64d(envelope.sig)
@@ -95,18 +109,36 @@ def check_envelope(
         raise Reject("unknown_device", f"device {obj.device} is not in the device list")
     if device.status != "active":
         raise Reject("revoked_device", f"device {obj.device} is {device.status}")
-    if obj.op != OP_SEND:
-        raise Reject("op_mismatch", f"signed op {obj.op!r}, expected {OP_SEND!r}")
-    if obj.key != "normal":
-        raise Reject("wrong_key_level", f"{OP_SEND} is signed with the normal key")
-    if not verify_der(device.keys["normal"], raw, sig):
-        raise Reject("bad_signature", "signature does not match the device's normal key")
-    if body_hash(envelope.body) != obj.body:
-        raise Reject("body_mismatch", "body hash does not match the signed object")
-    try:
-        message = parse_body(envelope.body)
-    except ValueError as e:
-        raise Reject("bad_body", str(e)) from e
+    if obj.op not in ops:
+        raise Reject("op_mismatch", f"signed op {obj.op!r}, expected one of {list(ops)}")
+    message: FriendMessage | None = None
+    decision: FriendDecision | None = None
+    if obj.op == OP_SEND:
+        if obj.key != "normal":
+            raise Reject("wrong_key_level", f"{OP_SEND} is signed with the normal key")
+        if not verify_der(device.keys["normal"], raw, sig):
+            raise Reject("bad_signature", "signature does not match the device's normal key")
+        if body_hash(envelope.body) != obj.body:
+            raise Reject("body_mismatch", "body hash does not match the signed object")
+        try:
+            message = parse_body(envelope.body)
+        except ValueError as e:
+            raise Reject("bad_body", str(e)) from e
+    else:
+        if not verify_der(device.keys[obj.key], raw, sig):
+            raise Reject("bad_signature", f"signature does not match the device's {obj.key} key")
+        if body_hash(envelope.body) != obj.body:
+            raise Reject("body_mismatch", "body hash does not match the signed object")
+        try:
+            decision = parse_decide_body(envelope.body)
+        except ValueError as e:
+            raise Reject("bad_body", str(e)) from e
+        if obj.key != KEY_FOR_DECISION[decision.decision]:
+            raise Reject(
+                "wrong_key_level",
+                f"{OP_DECIDE} {decision.decision} needs the "
+                f"{KEY_FOR_DECISION[decision.decision]} key, signed with {obj.key}",
+            )
     ts = parse_ts(obj.ts)
     if now - ts > window:
         raise Reject("too_old", f"signed at {obj.ts}, older than {int(window.total_seconds())} s")
@@ -114,7 +146,7 @@ def check_envelope(
         raise Reject("from_future", f"signed at {obj.ts}, ahead of this clock")
     if seen(obj.nonce):
         raise Reject("replayed", "this message was already delivered")
-    return Verified(message=message, device=device, obj=obj)
+    return Verified(device=device, obj=obj, message=message, decision=decision)
 
 
 # --- ledger and logs -----------------------------------------------------------------
@@ -193,7 +225,18 @@ def handle(
         return _block(cfg, sid, "error", f"{type(e).__name__}: {e}")
     signed_at = parse_ts(verified.obj.ts).astimezone().strftime("%H:%M:%S")
     label = f"[{VERIFIED_MARK} {cfg.owner_label} · {verified.device.name} · {signed_at}]"
+    if verified.decision is not None:
+        d = verified.decision
+        label = label[:-1] + " · decide]"
+        return _context(
+            f"{label}\n{d.decision} · question {d.id[:8]} · {pointer_of(sid)}\n{d.action}"
+        )
+    assert verified.message is not None
     return _context(f"{label}\n{verified.message.text}")
+
+
+def pointer_of(sid: str) -> str:
+    return f"⟦rh:{sid}⟧"
 
 
 def _load_envelope(cfg: FriendConfig, sid: str) -> Envelope:
