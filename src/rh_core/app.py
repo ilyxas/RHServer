@@ -386,7 +386,7 @@ async def friend_send(request: Request) -> Response:
     envelope = envelope_from_headers(request.headers, body)
     _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
     core.journal.append(
-        "chat.friend",
+        "friend.message",
         device=verdict.device.id,
         id=sid,
         message_id=message.id,

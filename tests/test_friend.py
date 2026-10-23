@@ -74,7 +74,7 @@ def test_core_vector(core: Core, v: dict[str, Any]) -> None:
         for f in sorted(core.config.journal_dir.glob("*.jsonl"))
         for line in f.read_text().splitlines()
     ]
-    assert any(e["event"] == "chat.friend" and e["id"] == expect["spool_id"] for e in events)
+    assert any(e["event"] == "friend.message" and e["id"] == expect["spool_id"] for e in events)
 
 
 def test_build_vectors_verify_as_requests(core: Core) -> None:
