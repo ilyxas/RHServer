@@ -4,6 +4,7 @@
 
 - `api/openapi.yaml` 0.3.0: `POST /v1/friend` (`friend.send`, normal). Body `{"id","text","to":"Friend"}`; a body that does not fit is `bad_request`. Accepted requests are kept as received (auth header, signature, body bytes) under `spool_id` = first 32 hex of sha256(nonce) and answered with `{id, message_id, accepted_at}`.
 - New `vectors/friend.json`: the phone's body encoding (sorted keys, no spaces), core accept/reject cases against the stage 1 fixture, the core's signed device list (`{"payload":"<JCS>","sig"}`) and envelopes the Friend verifier must pass or block (tampered body, wrong op, wrong `to`, wrong key level, other device's signature, unknown and revoked device, replayed nonce, too old, from the future, pointer mismatch, bad or foreign device-list signature).
+- `text` has at most 8000 characters (`maxLength`; `bad_request` above), since it goes into the Friend session's context; vector `send-text-too-long`.
 - No changes to signing, existing operations, existing vectors or WebSocket events.
 
 ## Stage 2, Home and Log

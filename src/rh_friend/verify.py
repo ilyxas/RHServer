@@ -57,19 +57,21 @@ from rh_friend.config import MAX_FUTURE_S, FriendConfig
 
 VERIFIED_MARK = "RH ✔"
 UNSIGNED_LABEL = "[unsigned]"
-# Unsigned input may not look like a verified label in any way: no check-mark-like sign
-# anywhere, no bracketed "[RH", no bracketed "a · b · c" label shape. Only the hook's own
-# context carries labels; this only keeps the transcript from misleading.
+# Unsigned input may not look like the verified label: "RH" (Cyrillic and Greek
+# lookalikes folded) next to a check-like sign, or a bracket opening with "RH". Ordinary
+# text with a check sign ("Done ✓", "√2") passes. Only the hook's own context carries
+# labels; this keeps the transcript from misleading, it is not the proof.
 _CHECK_SIGNS = "\u2713\u2714\u2705\u2611\u221a\U0001f5f8\U0001f5f9"
 _LABEL_LIKE = re.compile(
-    rf"[{_CHECK_SIGNS}]|\[\s*RH\b|\[[^\]\n]{{0,120}}[·•∙][^\]\n]{{0,120}}[·•∙][^\]\n]{{0,120}}\]",
+    rf"RH\W{{0,4}}[{_CHECK_SIGNS}]|[\[(〔【〈［（{{<]\s*RH\b",
     re.IGNORECASE,
 )
 _INVISIBLE = {"\u115f", "\u1160", "\u3164", "\uffa0", "\u2800"}
+_CONFUSABLE = str.maketrans("РрНнΡρΗη", "RrHhRrHh")
 
 
 def looks_like_label(text: str) -> bool:
-    folded = unicodedata.normalize("NFKC", text)
+    folded = unicodedata.normalize("NFKD", text).translate(_CONFUSABLE)
     folded = "".join(
         c
         for c in folded

@@ -75,6 +75,7 @@ def core_cases() -> list[tuple[str, tuple[dict[str, str], bytes], str | None]]:
         ),
         ("send-wrong-recipient", t._signed(op=OP_SEND, body=body(to="RemoteHands")), "bad_request"),
         ("send-empty-text", t._signed(op=OP_SEND, body=body(text="  ")), "bad_request"),
+        ("send-text-too-long", t._signed(op=OP_SEND, body=body(text="x" * 8001)), "bad_request"),
         ("send-bad-id", t._signed(op=OP_SEND, body=body(msg_id="no spaces")), "bad_request"),
         (
             "send-extra-field",

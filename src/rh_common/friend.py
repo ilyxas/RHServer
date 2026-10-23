@@ -24,6 +24,7 @@ from rh_common.protocol import HEADER_AUTH, HEADER_SIG, format_ts
 OP_SEND = "friend.send"
 RECIPIENT = "Friend"
 
+MAX_TEXT = 8000  # characters; the message goes into the Friend session's context
 _MSG_ID_RE = re.compile(r"\A[A-Za-z0-9-]{1,64}\Z")
 _SPOOL_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 POINTER_RE = re.compile(r"\A⟦rh:([0-9a-f]{32})⟧\Z")
@@ -40,7 +41,8 @@ class FriendMessage:
 
 
 def parse_body(body: bytes) -> FriendMessage:
-    """{"to": "Friend", "id": "<1–64 of A-Za-z0-9->", "text": "<non-empty>"}; nothing else."""
+    """{"to": "Friend", "id": "<1–64 of A-Za-z0-9->", "text": "<1–8000 characters>"};
+    nothing else."""
     try:
         doc = json.loads(body)
     except (ValueError, UnicodeDecodeError) as e:
@@ -54,6 +56,8 @@ def parse_body(body: bytes) -> FriendMessage:
         raise ValueError("id must be 1–64 characters A-Z, a-z, 0-9 or -")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text must be a non-empty string")
+    if len(text) > MAX_TEXT:
+        raise ValueError(f"text is longer than {MAX_TEXT} characters")
     return FriendMessage(to=to, id=msg_id, text=text)
 
 

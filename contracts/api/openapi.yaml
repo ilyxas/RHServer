@@ -513,7 +513,7 @@ paths:
         verified one. Vectors: vectors/friend.json.
 
         The body is JSON {"id","text","to"}: `to` is "Friend", `id` is the phone's
-        message id (1–64 of A-Z a-z 0-9 -), `text` is not empty. A body that does not
+        message id (1–64 of A-Z a-z 0-9 -), `text` has 1–8000 characters. A body that does not
         fit is refused with bad_request.
       x-rh-op: friend.send
       x-rh-key: normal
@@ -527,7 +527,7 @@ paths:
               required: [id, text, to]
               properties:
                 id: {type: string, pattern: "^[A-Za-z0-9-]{1,64}$"}
-                text: {type: string, minLength: 1}
+                text: {type: string, minLength: 1, maxLength: 8000}
                 to: {type: string, const: Friend}
             example: {id: m-1, text: "check the build", to: Friend}
       responses:

@@ -401,13 +401,16 @@ def _write_public(path: Path, data: bytes) -> None:
     """Atomic write of a file the Friend session's user reads (mode 644). A directory it
     creates is 755; an existing one keeps its mode, so the core's own data directory stays
     700 and production points these paths elsewhere (config [friend])."""
-    if not path.parent.exists():
-        path.parent.mkdir(parents=True)
-        path.parent.chmod(0o755)
+    missing = [p for p in (path.parent, *path.parent.parents) if not p.exists()]
+    for directory in reversed(missing):
+        directory.mkdir()
+        directory.chmod(0o755)
     tmp = path.with_name(f".{path.name}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
-        os.write(fd, data)
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view) :]
         os.fsync(fd)
     finally:
         os.close(fd)

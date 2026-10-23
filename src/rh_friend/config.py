@@ -7,7 +7,9 @@ from here; nothing about a particular Mac or person is built in.
     inbox_dir    = "<core [friend] inbox_dir>"
     devices_file = "<core [friend] devices_file>"
     core_key     = "<base64 X9.63 core public key>"
-    seen_file    = "~/Friend/state/rh_seen.jsonl"
+    seen_file    = "~/Friend/state/rh_seen.jsonl"   # replay ledger; writable by the hook's
+                                                 # user, so wiping it allows one repeat of
+                                                 # a genuine message within window_s
     rejected_log = "~/Friend/log/rh_rejected.jsonl"
     window_s     = 900                           # how old a message may be when it arrives
     owner_label  = "owner"                       # shown in the verified label
