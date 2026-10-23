@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RemoteHands core API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
     signing scheme below applies to every operation unless it says otherwise.
@@ -496,6 +496,58 @@ paths:
                     type: array
                     items: {$ref: "#/components/schemas/QuickItem"}
               example: {items: []}
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
+  /v1/friend:
+    post:
+      operationId: friend.send
+      summary: A message from the owner to the Friend session
+      description: |
+        The core checks the request like any signed operation, then keeps it exactly
+        as received (X-RH-Auth, X-RH-Sig and the body bytes) in its friend inbox
+        under spool_id = first 32 hex of sha256(nonce). A bridge types only the line
+        `⟦rh:<spool_id>⟧` into the Friend session; the Friend verifier loads the
+        envelope and re-checks the phone's signature against the device list the core
+        exports, signed by the core key. Nothing on the way can turn a message into a
+        verified one. Vectors: vectors/friend.json.
+
+        The body is JSON {"id","text","to"}: `to` is "Friend", `id` is the phone's
+        message id (1–64 of A-Z a-z 0-9 -), `text` has 1–8000 characters. A body that does not
+        fit is refused with bad_request.
+      x-rh-op: friend.send
+      x-rh-key: normal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id, text, to]
+              properties:
+                id: {type: string, pattern: "^[A-Za-z0-9-]{1,64}$"}
+                text: {type: string, minLength: 1, maxLength: 8000}
+                to: {type: string, const: Friend}
+            example: {id: m-1, text: "check the build", to: Friend}
+      responses:
+        "200":
+          description: Accepted and handed to the Friend inbox
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, message_id, accepted_at]
+                properties:
+                  id: {type: string, pattern: "^[0-9a-f]{32}$", description: spool_id}
+                  message_id: {type: string}
+                  accepted_at: {$ref: "#/components/schemas/Timestamp"}
+              example:
+                id: 2f6c0d1e4b5a6f708192837465564700
+                message_id: m-1
+                accepted_at: "2026-10-23T03:12:05Z"
         "400": {$ref: "#/components/responses/Rejected"}
         "401": {$ref: "#/components/responses/Rejected"}
         "403": {$ref: "#/components/responses/Rejected"}

@@ -71,6 +71,15 @@ def main(argv: list[str] | None = None) -> int:
     verify = with_config(jr_cmds.add_parser("verify", help="check the hash chain of the journal"))
     verify.add_argument("--dir", type=Path, help="journal directory (default: from the config)")
 
+    fc = with_config(
+        sub.add_parser(
+            "friend-config", help="print a friend.toml for the Friend verifier and bridge"
+        )
+    )
+    fc.add_argument("--project", type=Path, required=True, help="the Friend project folder")
+    fc.add_argument("--tmux", default="tmux", help="path to tmux (default: tmux)")
+    fc.add_argument("--target", default="friend", help="tmux target (default: friend)")
+
     args = p.parse_args(argv)
     try:
         if args.command == "serve":
@@ -85,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
             return _devices(args)
         if args.command == "journal":
             return _journal_verify(args)
+        if args.command == "friend-config":
+            return _friend_config(args, sys.stdout)
     except (ConfigError, AdminUnavailable) as e:
         print(f"rhcore: {e}", file=sys.stderr)
         return 2
@@ -92,6 +103,39 @@ def main(argv: list[str] | None = None) -> int:
         print("\nОтменено.", file=sys.stderr)
         return 130
     p.print_help()
+    return 0
+
+
+def _friend_config(args: argparse.Namespace, out: TextIO) -> int:
+    """friend.toml with the core's public key pinned and its friend paths."""
+    from rh_common.crypto import b64e, public_x963
+    from rh_core import keys
+
+    cfg = _config(args)
+    if not cfg.key_path.exists():
+        raise ConfigError(f"no core key at {cfg.key_path}: start the core once first")
+    core_pub = public_x963(keys.load_or_create(cfg.key_path))
+    project = args.project.expanduser().resolve()
+
+    def q(value: object) -> str:
+        return json.dumps(str(value), ensure_ascii=False)
+
+    lines = [
+        f"project_dir = {q(project)}",
+        f"inbox_dir = {q(cfg.inbox_dir)}",
+        f"devices_file = {q(cfg.devices_path)}",
+        f"core_key = {q(b64e(core_pub))}",
+        f"seen_file = {q(project / 'state' / 'rh_seen.jsonl')}",
+        f"rejected_log = {q(project / 'log' / 'rh_rejected.jsonl')}",
+        "window_s = 900",
+        'owner_label = "owner"',
+        "",
+        "[bridge]",
+        f"tmux = {q(args.tmux)}",
+        f"target = {q(args.target)}",
+        f"state_file = {q(project / 'state' / 'rh_bridge.json')}",
+    ]
+    out.write("\n".join(lines) + "\n")
     return 0
 
 
