@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RemoteHands core API
-  version: 0.4.0
+  version: 0.5.0
   description: |
     HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
     signing scheme below applies to every operation unless it says otherwise.
@@ -208,7 +208,7 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [mac_name, core_version, agent_version, mode, server_time]
+                required: [mac_name, core_version, agent_version, mode, server_time, channel]
                 properties:
                   mac_name: {type: string}
                   core_version: {type: string}
@@ -217,6 +217,7 @@ paths:
                     description: Null until rh-agent exists (stage 3) or while it is not running
                   mode: {enum: [dev, production]}
                   server_time: {$ref: "#/components/schemas/Timestamp"}
+                  channel: {$ref: "#/components/schemas/Channel"}
         "400": {$ref: "#/components/responses/Rejected"}
         "401": {$ref: "#/components/responses/Rejected"}
         "403": {$ref: "#/components/responses/Rejected"}
@@ -330,7 +331,7 @@ paths:
           rh.activity    rows     the 10 newest log.list entries of filter "all"
                                   (Home "Last Activity"): row id = log entry id,
                                   title, subtitle = detail, at = entry ts
-          agents.status  rows     the team from ~/Friend/CLAUDE.md, in file order:
+          agents.status  rows     the team from the core's team_file, in file order:
                                   id and title = agent id, subtitle = its role,
                                   status.text = working | idle | monitoring |
                                   stopped | unknown; status.state = ok for working
@@ -386,7 +387,7 @@ paths:
                     type: rows
                     at: "2026-10-19T12:00:00Z"
                     value:
-                      - {id: Friend, title: Friend, subtitle: observer, status: {state: ok, text: monitoring}}
+                      - {id: Agent-Alpha, title: Agent-Alpha, subtitle: observer, status: {state: ok, text: monitoring}}
                       - {id: RemoteHands, title: RemoteHands, subtitle: executor on the Mac, status: {state: "off", text: unknown}}
                   render.queue: {status: pending}
                 server_time: "2026-10-19T12:00:00Z"
@@ -503,17 +504,20 @@ paths:
   /v1/friend:
     post:
       operationId: friend.send
-      summary: A message from the owner to the Friend session
+      summary: A message from the owner to the channel agent's session
       description: |
+        "friend" names the mechanism (after the agent that designed it and first worked
+        on it); the message goes to whichever agent is on the channel, status.channel.
+
         The core checks the request like any signed operation, then keeps it exactly
-        as received (X-RH-Auth, X-RH-Sig and the body bytes) in its friend inbox
+        as received (X-RH-Auth, X-RH-Sig and the body bytes) in its inbox
         under spool_id = first 32 hex of sha256(nonce). A bridge types only the line
-        `⟦rh:<spool_id>⟧` into the Friend session; the Friend verifier loads the
+        `⟦rh:<spool_id>⟧` into the agent's session; the agent-side verifier loads the
         envelope and re-checks the phone's signature against the device list the core
         exports, signed by the core key. Nothing on the way can turn a message into a
         verified one. Vectors: vectors/friend.json.
 
-        The body is JSON {"id","text","to"}: `to` is "Friend", `id` is the phone's
+        The body is JSON {"id","text","to"}: `to` is status.channel.agent, `id` is the phone's
         message id (1–64 of A-Z a-z 0-9 -), `text` has 1–8000 characters. A body that does not
         fit is refused with bad_request.
       x-rh-op: friend.send
@@ -529,11 +533,11 @@ paths:
               properties:
                 id: {type: string, pattern: "^[A-Za-z0-9-]{1,64}$"}
                 text: {type: string, minLength: 1, maxLength: 8000}
-                to: {type: string, const: Friend}
-            example: {id: m-1, text: "check the build", to: Friend}
+                to: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$", description: "The channel agent's id, as status.channel.agent; any other value is bad_request"}
+            example: {id: m-1, text: "check the build", to: Agent-Alpha}
       responses:
         "200":
-          description: Accepted and handed to the Friend inbox
+          description: Accepted and handed to the agent's inbox
           headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
           content:
             application/json:
@@ -555,12 +559,12 @@ paths:
   /v1/friend/questions:
     get:
       operationId: friend.questions
-      summary: What Friend is waiting for the owner to decide
+      summary: What the channel agent is waiting for the owner to decide
       description: |
-        Open questions, oldest first. Friend asks before a protected action (one exact
+        Open questions, oldest first. The agent asks before a protected action (one exact
         tool call); the phone shows `text` and `action` in full, no truncation, and
         answers with friend.decide. `action` is canonical JSON (RFC 8785) of
-        {"input": <tool input>, "tool": "<tool name>"}: the call as the Friend gate
+        {"input": <tool input>, "tool": "<tool name>"}: the call as the gate
         will see it. The phone must not re-encode it: the decision carries it as is.
         A question leaves the list once it is answered or withdrawn. Home shows the
         same questions as `rh.questions` rows (data.get). Vectors: vectors/friend_decide.json.
@@ -594,9 +598,10 @@ paths:
   /v1/friend/decide:
     post:
       operationId: friend.decide
-      summary: The owner's decision on one Friend question
+      summary: The owner's decision on one question of the channel agent
       description: |
-        Body {"to":"Friend","id":<question id>,"question_sha256","action","decision"}:
+        Body {"to":<agent>,"id":<question id>,"question_sha256","action","decision"}:
+        `to` is status.channel.agent,
         `question_sha256` is sha256 of the question `text` exactly as shown (UTF-8),
         `action` is the question's action exactly as received, `decision` is allow or
         deny. The key level follows the decision: allow is signed with the critical
@@ -609,9 +614,9 @@ paths:
 
         Accepted: the question is closed, the request is kept exactly as received
         (auth header, signature, body bytes) under spool_id = first 32 hex of
-        sha256(nonce), the bridge types ⟦rh:<spool_id>⟧ into the Friend session, and
-        the Friend verifier re-checks the phone's signature. An allow decision lets
-        the Friend gate run exactly that action once, within the gate's window
+        sha256(nonce), the bridge types ⟦rh:<spool_id>⟧ into the agent's session, and
+        the agent-side verifier re-checks the phone's signature. An allow decision lets
+        the gate run exactly that action once, within the gate's window
         (default 120 s after the signed `ts`); the core spends it on the gate's request
         over its admin socket, first use wins. Vectors: vectors/friend_decide.json.
       x-rh-op: friend.decide
@@ -622,14 +627,14 @@ paths:
           application/json:
             schema: {$ref: "#/components/schemas/FriendDecision"}
             example:
-              to: Friend
+              to: Agent-Alpha
               id: 7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d
               question_sha256: 2b6e1a2f3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7
               action: '{"input":{"command":"kill -CONT 4242","description":"resume the paused agent"},"tool":"Bash"}'
               decision: allow
       responses:
         "200":
-          description: Accepted, recorded and handed to the Friend inbox
+          description: Accepted, recorded and handed to the agent's inbox
           headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
           content:
             application/json:
@@ -765,6 +770,17 @@ components:
         detail: {type: string}
         device: {$ref: "#/components/schemas/DeviceId"}
         op: {type: string}
+    Channel:
+      type: object
+      additionalProperties: false
+      required: [agent, title]
+      description: >-
+        The one agent on the channel (`[channel] agent` in the core config): `to` of
+        friend.send and friend.decide, and how the app names it. It can change between
+        two status calls when the owner switches the agent.
+      properties:
+        agent: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$"}
+        title: {type: string, minLength: 1, description: Shown in Chat and on question cards}
     FriendQuestion:
       type: object
       additionalProperties: false
@@ -783,7 +799,7 @@ components:
       additionalProperties: false
       required: [to, id, question_sha256, action, decision]
       properties:
-        to: {type: string, const: Friend}
+        to: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$", description: "The channel agent's id, as status.channel.agent; any other value is bad_request"}
         id: {type: string, pattern: "^[0-9a-f]{32}$", description: The question answered}
         question_sha256: {type: string, pattern: "^[0-9a-f]{64}$", description: sha256 of the question text as shown}
         action: {type: string, minLength: 1, maxLength: 65536, description: The question's action, unchanged}

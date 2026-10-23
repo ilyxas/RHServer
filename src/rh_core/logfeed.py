@@ -75,7 +75,7 @@ def kind_of(record: dict[str, Any], *, include_reads: bool = False) -> str | Non
         return "chat"
     # friend.message stays kind system: the chat filter is the RemoteHands chat (stage 3).
     if event.startswith("friend.question") or event.startswith("friend.decision"):
-        return "approval"  # the owner's decisions for Friend, like approvals for the agent
+        return "approval"  # the owner's decisions for the channel agent, like approvals
     if result in ("rejected", "error", "failed"):
         return "error"
     if event in ("request", "challenge"):
@@ -110,6 +110,10 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
             return "?"
         return names(device) or device[:8]
 
+    # The channel agent's id is in every friend.* record since schema 4; older records
+    # predate it and say "the agent".
+    who = _text(record.get("agent")) or "the agent"
+
     if event == "request":
         if result == "accepted":
             return f"Accepted {record.get('op')}", detail
@@ -130,25 +134,33 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
         by_text = "from the terminal" if by == "terminal" else f"by {name(by)}"
         return f"Revoked {name(record.get('device'))}", by_text
     if event == "friend.message":
-        return f"Message to Friend from {name(record.get('device'))}", None
+        return f"Message to {who} from {name(record.get('device'))}", None
     if event == "friend.question":
-        return "Friend asks for a decision", f"question {_short(record.get('id'))}"
+        return f"{who} asks for a decision", f"question {_short(record.get('id'))}"
     if event == "friend.question.withdrawn":
-        return "Friend withdrew a question", f"question {_short(record.get('id'))}"
+        return f"{who} withdrew a question", f"question {_short(record.get('id'))}"
     if event == "friend.decision":
         verb = "Allowed" if record.get("decision") == "allow" else "Denied"
         return (
-            f"{verb} Friend's action ({name(record.get('device'))})",
+            f"{verb} {who}'s action ({name(record.get('device'))})",
             f"question {_short(record.get('question_id'))}, decision {_short(record.get('id'))}",
         )
     if event == "friend.decision.voided":
-        return f"Friend's allow superseded: {reason}", f"decision {_short(record.get('id'))}"
+        return f"{who}'s allow superseded: {reason}", f"decision {_short(record.get('id'))}"
     if event == "friend.question.refused":
-        return "Friend's question refused", str(record.get("reason") or "")
+        return f"{who}'s question refused", str(record.get("reason") or "")
     if event == "friend.decision.used":
-        return "Friend used a decision", f"decision {_short(record.get('id'))}"
+        return f"{who} used a decision", f"decision {_short(record.get('id'))}"
     if event == "friend.decision.refused":
-        return f"Friend's decision refused: {reason}", f"decision {_short(record.get('id'))}"
+        return f"{who}'s decision refused: {reason}", f"decision {_short(record.get('id'))}"
+    if event == "friend.channel.changed":
+        withdrawn, voided = record.get("withdrawn") or [], record.get("voided") or []
+        return (
+            f"Channel agent changed: {record.get('from')} → {record.get('to')}",
+            f"{len(withdrawn)} question(s) withdrawn, {len(voided)} allow(s) voided",
+        )
+    if event == "friend.channel.warning":
+        return f"Channel agent {record.get('agent')}: warning", str(record.get("reason") or "")
     if event == "core.started":
         return "Core started", f"{record.get('mode')}, version {record.get('version')}"
     if event == "core.stopped":

@@ -1,4 +1,4 @@
-"""SQLite registry of rh-core: devices, nonces (SPEC §5.1), Friend questions and
+"""SQLite registry of rh-core: devices, nonces (SPEC §5.1), the channel agent's questions and
 decisions (friend slice 2).
 
 Later stages add tables (action_id, data_id, approvals, quick access) as new
@@ -42,8 +42,8 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX nonces_expires ON nonces (expires);
     """,
-    # friend slice 2: questions Friend asks the owner, and the signed decisions that answer
-    # them. A decision is spent once (used_at); the gate asks over the admin socket.
+    # friend slice 2: questions the channel agent asks the owner, and the signed decisions that
+    # answer them. A decision is spent once (used_at); the gate asks over the admin socket.
     """
     CREATE TABLE friend_questions (
         id TEXT PRIMARY KEY,
@@ -74,7 +74,28 @@ MIGRATIONS: list[str] = [
     ALTER TABLE friend_decisions ADD COLUMN voided_at TEXT;
     ALTER TABLE friend_decisions ADD COLUMN voided_by TEXT
     """,
+    # any single agent: whose question or decision it is, and which agent the channel is
+    # bound to. Rows from before get the configured agent on the first start (bind_channel).
+    """
+    ALTER TABLE friend_questions ADD COLUMN agent TEXT;
+    ALTER TABLE friend_decisions ADD COLUMN agent TEXT;
+    CREATE TABLE channel (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        agent TEXT NOT NULL,
+        since TEXT NOT NULL
+    )
+    """,
 ]
+
+
+@dataclass(frozen=True)
+class ChannelChange:
+    """What bind_channel did when the configured agent differs from the bound one."""
+
+    previous: str
+    agent: str
+    withdrawn: list[str]  # question ids
+    voided: list[str]  # decision ids
 
 
 @dataclass(frozen=True)
@@ -91,6 +112,7 @@ class DecisionRow:
     used_at: str | None
     voided_at: str | None = None
     voided_by: str | None = None
+    agent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -264,14 +286,72 @@ class Store:
         with self._tx() as db:
             db.execute("UPDATE devices SET status = ? WHERE id = ?", (status, device_id))
 
-    # --- Friend questions and decisions ---------------------------------------
+    # --- the channel ------------------------------------------------------------
 
-    def add_question(self, question: Question) -> None:
+    def channel_agent(self) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT agent FROM channel WHERE id = 1").fetchone()
+        return str(row["agent"]) if row else None
+
+    def bind_channel(self, agent: str, *, now: datetime) -> ChannelChange | None:
+        """Bind the channel to the configured agent on start.
+
+        First start (or rows from before schema 4): rows without an agent get this one.
+        Another agent than the bound one: its open questions are withdrawn and its unused
+        allows voided (voided_by "channel:<new agent>"), in one transaction; the change is
+        returned for the journal. The same agent: None."""
+        stamp = format_ts(now)
+        with self._tx() as db:
+            row = db.execute("SELECT agent FROM channel WHERE id = 1").fetchone()
+            previous = str(row["agent"]) if row else None
+            if previous is None:
+                db.execute(
+                    "INSERT INTO channel (id, agent, since) VALUES (1, ?, ?)", (agent, stamp)
+                )
+            for table in ("friend_questions", "friend_decisions"):
+                db.execute(
+                    f"UPDATE {table} SET agent = ? WHERE agent IS NULL",  # noqa: S608
+                    (previous or agent,),
+                )
+            if previous is None or previous == agent:
+                return None
+            withdrawn = [
+                r["id"]
+                for r in db.execute(
+                    "SELECT id FROM friend_questions WHERE agent = ? AND status = 'open'"
+                    " ORDER BY asked_at, id",
+                    (previous,),
+                ).fetchall()
+            ]
+            db.execute(
+                "UPDATE friend_questions SET status = 'withdrawn', closed_at = ?"
+                " WHERE agent = ? AND status = 'open'",
+                (stamp, previous),
+            )
+            voided = [
+                r["id"]
+                for r in db.execute(
+                    "SELECT id FROM friend_decisions WHERE agent = ? AND decision = 'allow'"
+                    " AND used_at IS NULL AND voided_at IS NULL ORDER BY accepted_at, id",
+                    (previous,),
+                ).fetchall()
+            ]
+            db.execute(
+                "UPDATE friend_decisions SET voided_at = ?, voided_by = ? WHERE agent = ?"
+                " AND decision = 'allow' AND used_at IS NULL AND voided_at IS NULL",
+                (stamp, f"channel:{agent}", previous),
+            )
+            db.execute("UPDATE channel SET agent = ?, since = ? WHERE id = 1", (agent, stamp))
+            return ChannelChange(previous=previous, agent=agent, withdrawn=withdrawn, voided=voided)
+
+    # --- questions and decisions --------------------------------------------------
+
+    def add_question(self, question: Question, *, agent: str) -> None:
         with self._tx() as db:
             db.execute(
-                "INSERT INTO friend_questions (id, text, action, asked_at, status)"
-                " VALUES (?, ?, ?, ?, 'open')",
-                (question.id, question.text, question.action, question.asked_at),
+                "INSERT INTO friend_questions (id, text, action, asked_at, status, agent)"
+                " VALUES (?, ?, ?, ?, 'open', ?)",
+                (question.id, question.text, question.action, question.asked_at, agent),
             )
 
     def question(self, question_id: str) -> tuple[Question, str] | None:
@@ -316,8 +396,8 @@ class Store:
                 return False
             db.execute(
                 "INSERT INTO friend_decisions (id, question_id, device, key, decision,"
-                " question_sha256, action, signed_at, accepted_at, used_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                " question_sha256, action, signed_at, accepted_at, used_at, agent)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
                 (
                     decision.id,
                     decision.question_id,
@@ -328,6 +408,7 @@ class Store:
                     decision.action,
                     decision.signed_at,
                     decision.accepted_at,
+                    decision.agent,
                 ),
             )
             return True
@@ -374,8 +455,8 @@ class Store:
         with self._tx() as db:
             db.execute(
                 "INSERT INTO friend_decisions (id, question_id, device, key, decision,"
-                " question_sha256, action, signed_at, accepted_at, used_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " question_sha256, action, signed_at, accepted_at, used_at, agent)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     decision.id,
                     decision.question_id,
@@ -387,6 +468,7 @@ class Store:
                     decision.signed_at,
                     decision.accepted_at,
                     decision.used_at,
+                    decision.agent,
                 ),
             )
 
@@ -409,6 +491,7 @@ def _decision(row: sqlite3.Row) -> DecisionRow:
         used_at=row["used_at"],
         voided_at=row["voided_at"],
         voided_by=row["voided_by"],
+        agent=row["agent"],
     )
 
 

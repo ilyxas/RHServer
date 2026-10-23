@@ -1,29 +1,31 @@
-"""Configuration of the Friend verifier and bridge (TOML).
+"""Configuration of the agent-side verifier, bridge and gate (TOML).
 
-Every path, the tmux target, the pinned core key and the freshness window come
-from here; nothing about a particular Mac or person is built in.
+Every path, the agent's id, the tmux target, the pinned core key and the freshness
+window come from here; nothing about a particular Mac, person or agent is built in.
+`rhcore friend-config` and `rhcore channel set` write it from the core's [channel].
 
-    project_dir  = "~/Friend"                    # the hook acts only in this project
-    inbox_dir    = "<core [friend] inbox_dir>"
-    devices_file = "<core [friend] devices_file>"
+    agent        = "<[channel] agent>"           # messages must be addressed to it
+    project_dir  = "<[channel] project_dir>"     # the hook acts only in this project
+    inbox_dir    = "<core inbox_dir>"
+    devices_file = "<core devices_file>"
     core_key     = "<base64 X9.63 core public key>"
-    seen_file    = "~/Friend/state/rh_seen.jsonl"   # replay ledger; writable by the hook's
-                                                 # user, so wiping it allows one repeat of
-                                                 # a genuine message within window_s
-    rejected_log = "~/Friend/log/rh_rejected.jsonl"
+    seen_file    = "<project_dir>/state/rh_seen.jsonl"   # default; replay ledger, writable
+                                                 # by the hook's user, so wiping it allows
+                                                 # one repeat of a genuine message
+    rejected_log = "<project_dir>/log/rh_rejected.jsonl" # default
     window_s     = 900                           # how old a message may be when it arrives
     owner_label  = "owner"                       # shown in the verified label
     require_protected = false                    # true for the managed (root-owned) install
 
     [bridge]
     tmux   = "/opt/homebrew/bin/tmux"
-    target = "friend"                            # tmux target (session or session:window.pane)
-    state_file = "~/Friend/state/rh_bridge.json"
+    target = "<[channel] target>"                # tmux target (session or session:window.pane)
+    state_file = "<project_dir>/state/rh_bridge.json"    # default
 
     [gate]                                       # PreToolUse gate (rh-friend-gate)
     admin_socket = "<core data_dir>/admin.sock"  # where decisions are spent, once each
     decide_window_s = 120                        # how old an allow decision may be
-    log = "~/Friend/log/rh_gate.jsonl"           # every verdict on a protected call
+    log = "<project_dir>/log/rh_gate.jsonl"      # default; every verdict on a protected call
     ask = "<venv>/bin/rh-friend-ask"             # a plain call of this program is never
                                                  # protected (asking must not need an answer)
 
@@ -52,12 +54,18 @@ from pathlib import Path
 from typing import Any
 
 from rh_common.crypto import b64d, load_public_x963
+from rh_common.friend import check_agent_id
 from rh_common.jcs import JCSError, canonicalize
 
 DEFAULT_PATH = Path("~/Library/Application Support/RemoteHands/friend.toml").expanduser()
 DEFAULT_WINDOW_S = 900
 DEFAULT_DECIDE_WINDOW_S = 120  # an allow decision is good for two minutes
 MAX_FUTURE_S = 120  # same clock tolerance as the core
+# Defaults inside the agent's project folder.
+SEEN_FILE = Path("state/rh_seen.jsonl")
+REJECTED_LOG = Path("log/rh_rejected.jsonl")
+BRIDGE_STATE_FILE = Path("state/rh_bridge.json")
+GATE_LOG = Path("log/rh_gate.jsonl")
 
 
 class ConfigError(ValueError):
@@ -108,6 +116,7 @@ class GateConfig:
 
 @dataclass(frozen=True)
 class FriendConfig:
+    agent: str  # the channel agent this session is; `to` of every envelope must match
     project_dir: Path
     inbox_dir: Path
     devices_file: Path
@@ -123,6 +132,7 @@ class FriendConfig:
 
 
 _TOP = {
+    "agent",
     "project_dir",
     "inbox_dir",
     "devices_file",
@@ -135,7 +145,7 @@ _TOP = {
     "gate",
     "require_protected",
 }
-_REQUIRED = ("project_dir", "inbox_dir", "devices_file", "core_key", "seen_file", "rejected_log")
+_REQUIRED = ("agent", "project_dir", "inbox_dir", "devices_file", "core_key")
 
 
 def load(path: Path) -> FriendConfig:
@@ -160,6 +170,14 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
         return p if p.is_absolute() else base / p
 
     try:
+        agent = check_agent_id(doc["agent"])
+    except ValueError as e:
+        raise ConfigError(str(e)) from e
+    project = path(doc["project_dir"])
+    for key in ("seen_file", "rejected_log"):
+        if key in doc and (not isinstance(doc[key], str) or not doc[key]):
+            raise ConfigError(f"{key} must be a path")
+    try:
         core_key = b64d(doc["core_key"])
         load_public_x963(core_key)
     except ValueError as e:
@@ -174,36 +192,45 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
     if not isinstance(label, str) or not label:
         raise ConfigError("owner_label must be a non-empty string")
     return FriendConfig(
-        project_dir=path(doc["project_dir"]),
+        agent=agent,
+        project_dir=project,
         inbox_dir=path(doc["inbox_dir"]),
         devices_file=path(doc["devices_file"]),
         core_key=core_key,
-        seen_file=path(doc["seen_file"]),
-        rejected_log=path(doc["rejected_log"]),
+        seen_file=path(doc["seen_file"]) if "seen_file" in doc else project / SEEN_FILE,
+        rejected_log=(
+            path(doc["rejected_log"]) if "rejected_log" in doc else project / REJECTED_LOG
+        ),
         window_s=window,
         owner_label=label,
-        bridge=_bridge(doc["bridge"], path) if "bridge" in doc else None,
-        gate=_gate(doc["gate"], path) if "gate" in doc else None,
+        bridge=_bridge(doc["bridge"], path, project) if "bridge" in doc else None,
+        gate=_gate(doc["gate"], path, project) if "gate" in doc else None,
         require_protected=protected,
     )
 
 
-def _bridge(table: Any, path: Any) -> BridgeConfig:
+def _bridge(table: Any, path: Any, project: Path) -> BridgeConfig:
     if not isinstance(table, dict):
         raise ConfigError("[bridge] must be a table")
     unknown = set(table) - {"tmux", "target", "state_file"}
     if unknown:
         raise ConfigError(f"unknown [bridge] keys: {sorted(unknown)}")
-    for key in ("target", "state_file"):
-        if not isinstance(table.get(key), str) or not table[key]:
-            raise ConfigError(f"[bridge] {key} is required")
+    if not isinstance(table.get("target"), str) or not table["target"]:
+        raise ConfigError("[bridge] target is required")
+    state = table.get("state_file")
+    if state is not None and (not isinstance(state, str) or not state):
+        raise ConfigError("[bridge] state_file must be a path")
     tmux = table.get("tmux", "tmux")
     if not isinstance(tmux, str) or not tmux:
         raise ConfigError("[bridge] tmux must be a string")
-    return BridgeConfig(tmux=tmux, target=table["target"], state_file=path(table["state_file"]))
+    return BridgeConfig(
+        tmux=tmux,
+        target=table["target"],
+        state_file=path(state) if state else project / BRIDGE_STATE_FILE,
+    )
 
 
-def _gate(table: Any, path: Any) -> GateConfig:
+def _gate(table: Any, path: Any, project: Path) -> GateConfig:
     if not isinstance(table, dict):
         raise ConfigError("[gate] must be a table")
     unknown = set(table) - {"admin_socket", "decide_window_s", "log", "protected", "ask"}
@@ -226,7 +253,7 @@ def _gate(table: Any, path: Any) -> GateConfig:
     return GateConfig(
         admin_socket=path(table["admin_socket"]),
         decide_window_s=window,
-        log=path(log) if log else None,
+        log=path(log) if log else project / GATE_LOG,
         ask=path(ask) if ask else None,
         protected=tuple(_rule(r) for r in rules),
     )
@@ -304,7 +331,7 @@ DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
         "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
         "field": "file_path",
         # The gate resolves file_path against the call's cwd first, so "CLAUDE.md" and
-        # "~/Friend/.claude/settings.json" are seen as full paths.
+        # "~/Alpha/.claude/settings.json" are seen as full paths.
         "match": [
             r"((^|/)\.claude(/|$)|(^|/)CLAUDE\.md$|/LaunchAgents/|/LaunchDaemons/"
             r"|managed-settings|(^|/)friend\.toml$|(^|/)core\.toml$|(^|/)\.ssh(/|$)"

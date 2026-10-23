@@ -1,5 +1,6 @@
 """friend.send vectors: request bodies, core acceptance, the signed device list and
-the envelopes the Friend verifier must pass or block.
+the envelopes the agent-side verifier must pass or block. The channel agent is AGENT, an
+id other than the mechanism's namesake, so a leftover hard-coded name fails the vectors.
 
 Imported by gen_vectors.py. Keys, devices and nonces are the stage 1 fixture
 (vectors_trust); existing vector files are not touched.
@@ -29,7 +30,11 @@ from rh_friend.verify import Reject, check_envelope
 WINDOW = timedelta(seconds=900)
 
 
-def body(text: str = "Проверь сборку 🚀", *, to: str = "Friend", msg_id: str = "m-1") -> bytes:
+AGENT = "Agent-Alpha"  # the channel agent of every vector: `to` and `status.channel.agent`
+OTHER_AGENT = "Agent-Beta"  # a genuine message to another agent: wrong recipient
+
+
+def body(text: str = "Проверь сборку 🚀", *, to: str = AGENT, msg_id: str = "m-1") -> bytes:
     """The phone's encoding: sorted keys, no spaces, UTF-8 as is."""
     doc = {"id": msg_id, "text": text, "to": to}
     return json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -73,13 +78,13 @@ def core_cases() -> list[tuple[str, tuple[dict[str, str], bytes], str | None]]:
             t._signed(p="R", nonce_label="for-R", op=OP_SEND, body=body()),
             "revoked_device",
         ),
-        ("send-wrong-recipient", t._signed(op=OP_SEND, body=body(to="RemoteHands")), "bad_request"),
+        ("send-wrong-recipient", t._signed(op=OP_SEND, body=body(to=OTHER_AGENT)), "bad_request"),
         ("send-empty-text", t._signed(op=OP_SEND, body=body(text="  ")), "bad_request"),
         ("send-text-too-long", t._signed(op=OP_SEND, body=body(text="x" * 8001)), "bad_request"),
         ("send-bad-id", t._signed(op=OP_SEND, body=body(msg_id="no spaces")), "bad_request"),
         (
             "send-extra-field",
-            t._signed(op=OP_SEND, body=b'{"id":"m-1","text":"x","to":"Friend","x":1}'),
+            t._signed(op=OP_SEND, body=b'{"id":"m-1","text":"x","to":"Agent-Alpha","x":1}'),
             "bad_request",
         ),
         (
@@ -104,7 +109,7 @@ def evaluate_core(headers: dict[str, str], raw: bytes) -> str | None:
     if verdict.error is not None:
         return verdict.error.code
     try:
-        parse_body(raw)
+        parse_body(raw, AGENT)
     except ValueError:
         return "bad_request"
     return None
@@ -152,8 +157,8 @@ def envelope_cases() -> list[dict[str, Any]]:
     )
     h, b = t._signed(op="ping", body=body())
     add("wrong-op", _envelope(h, b), "op_mismatch")
-    h, b = t._signed(op=OP_SEND, body=body(to="RemoteHands"))
-    add("wrong-to", _envelope(h, b), "bad_body")
+    h, b = t._signed(op=OP_SEND, body=body(to=OTHER_AGENT))
+    add("wrong-to", _envelope(h, b), "wrong_recipient")
     h, b = t._signed(level="critical", op=OP_SEND, body=body())
     add("wrong-key-level", _envelope(h, b), "wrong_key_level")
     h, b = t._signed(op=OP_SEND, body=body(), signer="B.normal")
@@ -207,6 +212,7 @@ def evaluate_envelope(case: dict[str, Any], docs: dict[str, str]) -> str | None:
             now=NOWS[case["now"]],
             window=WINDOW,
             seen=set(case["seen_nonces"]).__contains__,
+            agent=AGENT,
         )
     except Reject as e:
         return e.code
@@ -264,15 +270,17 @@ def friend_vectors() -> dict[str, Any]:
     return {
         "description": (
             "friend.send. build: the phone's body is JSON with sorted keys and no spaces, "
-            '{"id","text","to":"Friend"}, signed with the normal key at POST /v1/friend. '
+            '{"id","text","to":<agent>}, signed with the normal key at POST /v1/friend; '
+            "`agent` is the channel agent (status.channel.agent). "
             "core: requests against signed_requests.json fixture; accept spools the request "
             "as received under spool_id = first 32 hex of sha256(nonce). devices: the core's "
             'signed device list {"payload":"<JCS>","sig":"<core key over payload>"}. '
-            "envelopes: what the Friend verifier must pass or block for a pointer "
+            "envelopes: what the agent-side verifier must pass or block for a pointer "
             f"⟦rh:<spool_id>⟧ at `now` with a {int(WINDOW.total_seconds())} s window "
             "and the listed nonces already seen."
         ),
-        "version": 1,
+        "version": 2,
+        "agent": AGENT,
         "core_pub_x963_b64": b64e(t.pub("core")),
         "window_s": int(WINDOW.total_seconds()),
         "build": build,
@@ -283,7 +291,7 @@ def friend_vectors() -> dict[str, Any]:
 
 
 def body_text(env: Envelope) -> str:
-    return parse_body(env.body).text
+    return parse_body(env.body, AGENT).text
 
 
 GENERATED = {"friend.json": friend_vectors}

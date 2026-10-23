@@ -56,7 +56,7 @@ class Rule:
 
 def claude_slug(cwd: Path) -> str:
     """Claude Code's project folder name for a working directory: every character
-    other than a letter or digit becomes "-" (/Users/owner/Friend -> -Users-owner-Friend)."""
+    other than a letter or digit becomes "-" (/Users/owner/Alpha -> -Users-owner-Alpha)."""
     return re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
 
 

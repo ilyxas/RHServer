@@ -1,7 +1,7 @@
-"""PreToolUse hook for the Friend session: a protected tool call runs only on a fresh,
+"""PreToolUse hook for the channel agent's session: a protected tool call runs only on a fresh,
 unused `allow` decision signed on the owner's phone for exactly that call.
 
-    rh-friend-gate --config <friend.toml> --project <Friend folder>   (hook JSON on stdin)
+    rh-friend-gate --config <friend.toml> --project <agent's project folder>   (hook JSON)
 
 The gate must never paralyse the session. Its first step for every call is a local check
 against the `[[gate.protected]]` rules; only a call that matches goes any further. So:
@@ -204,6 +204,7 @@ def candidates(
     devices: Any,
     now: datetime,
     window: timedelta,
+    agent: str,
 ) -> list[Candidate]:
     """Every decide envelope for this action, newest first (a deny before an allow signed
     at the same second), with why it fails if it does.
@@ -239,6 +240,7 @@ def candidates(
                 now=now,
                 window=window,
                 seen=lambda nonce: False,  # single use is the core's count, not a ledger here
+                agent=agent,
                 ops=(OP_DECIDE,),
             )
         except Reject as e:
@@ -314,7 +316,9 @@ def decide(
             check_protected_path(cfg.source)
     devices = _load_devices(cfg)
     window = timedelta(seconds=gate.decide_window_s)
-    found = candidates(cfg.inbox_dir, action=action, devices=devices, now=now, window=window)
+    found = candidates(
+        cfg.inbox_dir, action=action, devices=devices, now=now, window=window, agent=cfg.agent
+    )
     if not found:
         return Outcome(
             "block",
@@ -507,6 +511,7 @@ def _log(cfg: FriendConfig, out: Outcome, at: datetime, *, tool_name: str = "") 
     record: dict[str, Any] = {
         "at": _ts(at),
         "hook": "gate",
+        "agent": cfg.agent,
         "tool": tool_name,
         "rule": out.rule,
         "action_sha256": sha256_hex(out.action.encode("utf-8")) if out.action else None,

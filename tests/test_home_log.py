@@ -371,7 +371,7 @@ def test_config_agents_section(tmp_path: Path) -> None:
     assert cfg.team_file == tmp_path / "team.md"
     assert cfg.team_skip == ("Owner",)
     assert from_dict({**base, "agents": {"team_file": ""}}).team_file is None
-    assert from_dict(base).team_file == Path("~/Friend/CLAUDE.md").expanduser()
+    assert from_dict(base).team_file is None  # no default: the team file is the owner's choice
     for bad in ({"skip": "Owner"}, {"rules": []}, "x"):
         with pytest.raises(ConfigError):
             from_dict({**base, "agents": bad})
@@ -390,7 +390,7 @@ def test_dev_fixture_option() -> None:
     assert team == FIXTURE / "team.md"
     assert probe == FakeProbe(cpu=38.4, memory=61.2, disk=112_400_000_000)
     assert [m.id for m in parse_team(team.read_text(encoding="utf-8"))] == [
-        "Friend",
+        "Agent-Omega",
         "Agent-Alpha",
         "Agent-Beta",
         "RemoteHands",
@@ -466,7 +466,7 @@ def test_data_get_builtins(home: tuple[Core, TestClient, Phone]) -> None:
     assert "agent not running" in v["rh.status"]["value"]["text"]
     assert v["rh.approvals"]["value"] == [] and v["rh.questions"]["value"] == []
     assert [row["id"] for row in v["agents.status"]["value"]] == [
-        "Friend",
+        "Agent-Omega",
         "Agent-Alpha",
         "Agent-Beta",
         "RemoteHands",

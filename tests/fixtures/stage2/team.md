@@ -4,7 +4,7 @@ Same layout as the team section the core reads in production.
 
 ## Команда (идентификаторы)
 
-- **Friend** — observer.
+- **Agent-Omega** — observer.
 - **Agent-Alpha** — builds the render pipeline.
 - **Agent-Beta** — architecture.
 - **RemoteHands** — executor on the Mac.
