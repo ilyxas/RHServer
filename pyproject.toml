@@ -18,6 +18,8 @@ rhpage = "rh_cli.rhpage:main"
 rh-agent = "rh_agent.__main__:main"
 rh-friend-verify = "rh_friend.verify:main"
 rh-friend-bridge = "rh_friend.bridge:main"
+rh-friend-gate = "rh_friend.gate:main"
+rh-friend-ask = "rh_friend.ask:main"
 
 [dependency-groups]
 dev = [
@@ -59,6 +61,9 @@ src = ["src", "tests", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_friend_decide.py" = ["F811"]  # the `env` fixture is imported from test_core_flow
 
 [tool.mypy]
 python_version = "3.12"

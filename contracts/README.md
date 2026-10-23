@@ -11,6 +11,7 @@ Everything RHServer and RHClient must agree on byte for byte, kept in files inst
 | `vectors/jcs.json` | canonical JSON (RFC 8785) | stage 0 |
 | `vectors/{ecdsa,request_build,signed_requests,server_sig,pairing,ws_frames}.json` | signatures, requests, pairing, frames | stage 1 |
 | `vectors/friend.json` | friend.send: body, core acceptance, signed device list, Friend verifier envelopes | friend slice 1 |
+| `vectors/friend_decide.json` | friend.decide / friend.questions: question hash, decide body, core acceptance, verifier envelopes, gate cases | friend slice 2 |
 | `vectors/approval_hash.json`, `ssh_pubkey.json`, `pages/` | later stages | 4–6 |
 | `MANIFEST.sha256` | sha256 of every file here | stage 0 |
 | `CHANGELOG.md` | every change, with stage | stage 0 |

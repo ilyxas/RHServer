@@ -6,12 +6,14 @@ that fails returns `error` with a message, and the rest of the batch still comes
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from rh_common.friend import Question
 from rh_common.protocol import format_ts
 from rh_core import logfeed
 from rh_core.agents import Team
@@ -36,6 +38,7 @@ class DataSources:
         core_version: str,
         agent_version: Callable[[], str | None],
         clock: Callable[[], datetime],
+        questions: Callable[[], list[Question]] = list,
     ) -> None:
         self.probe = probe
         self.team = team
@@ -44,13 +47,14 @@ class DataSources:
         self.core_version = core_version
         self.agent_version = agent_version
         self.clock = clock
+        self.questions = questions
         self.builtin: dict[str, Callable[[], Reading]] = {
             "sys.cpu": lambda: ("number", round(self.probe.cpu_percent(), 1), "%"),
             "sys.memory": lambda: ("number", round(self.probe.memory_percent(), 1), "%"),
             "sys.disk_free": lambda: ("number", self.probe.disk_free(), "bytes"),
             "rh.status": self._status,
             "rh.approvals": lambda: ("rows", [], None),  # stage 4
-            "rh.questions": lambda: ("rows", [], None),  # stage 3
+            "rh.questions": self._questions,  # Friend's questions; the agent's at stage 3
             "rh.activity": self._activity,
             "agents.status": lambda: ("rows", self.team.rows(), None),
         }
@@ -64,6 +68,23 @@ class DataSources:
                 None,
             )
         return "status", {"state": "ok", "text": f"core {self.core_version} · agent {agent}"}, None
+
+    def _questions(self) -> Reading:
+        """One row per open Friend question: title = the question's first line, subtitle =
+        the tool it names; the Chat tab shows text and action in full."""
+        rows = []
+        for q in self.questions():
+            first = q.text.strip().splitlines()[0] if q.text.strip() else q.text
+            rows.append(
+                {
+                    "id": q.id,
+                    "title": first[:200],
+                    "subtitle": f"Friend asks · {_tool_of(q.action)}",
+                    "status": {"state": "warn", "text": "waiting"},
+                    "at": q.asked_at,
+                }
+            )
+        return "rows", rows, None
 
     def _activity(self) -> Reading:
         entries, _ = logfeed.page(self.journal_dir, names=self.names, limit=ACTIVITY_ROWS)
@@ -98,6 +119,14 @@ class DataSources:
                 out["unit"] = unit
             values[data_id] = out
         return values
+
+
+def _tool_of(action: str) -> str:
+    try:
+        doc = json.loads(action)
+        return str(doc["tool"])
+    except (ValueError, KeyError, TypeError):
+        return "?"
 
 
 def parse_ids(doc: Any) -> list[str]:

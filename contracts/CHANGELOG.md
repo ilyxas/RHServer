@@ -1,5 +1,14 @@
 # contracts/ changelog
 
+## friend.decide (signed decisions for the Friend gate)
+
+- `api/openapi.yaml` 0.4.0:
+  - `GET /v1/friend/questions` (`friend.questions`, normal): open questions of the Friend session, oldest first; each has `id`, `text`, `action` (canonical JSON `{"input","tool"}` of one exact tool call) and `asked_at`. Home shows the same list as `rh.questions` rows.
+  - `POST /v1/friend/decide` (`friend.decide`): body `{"to":"Friend","id","question_sha256","action","decision"}`; allow is signed with the critical key, deny with the normal key, the other way round is `wrong_key_level`. A body that does not fit, or a decision that names no open question or a different text hash or action, is `bad_request`. Accepted decisions are spooled like friend.send messages and answered with `{id, question_id, decision, accepted_at}`.
+  - Schemas `FriendQuestion`, `FriendDecision`.
+- New `vectors/friend_decide.json`: question text → `question_sha256`; the phone's decide body encoding; core accept/reject cases against the stage 1 fixture plus one open question; envelopes the Friend verifier must pass or block; gate cases (tool call + envelopes + core state → allow or block with code).
+- No changes to signing, existing operations, existing vectors (`friend.json` is byte for byte the same) or WebSocket events.
+
 ## friend.send (signed messages to the Friend session)
 
 - `api/openapi.yaml` 0.3.0: `POST /v1/friend` (`friend.send`, normal). Body `{"id","text","to":"Friend"}`; a body that does not fit is `bad_request`. Accepted requests are kept as received (auth header, signature, body bytes) under `spool_id` = first 32 hex of sha256(nonce) and answered with `{id, message_id, accepted_at}`.

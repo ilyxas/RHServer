@@ -7,6 +7,17 @@ JSON Lines both ways. Each connection sends one command:
     {"cmd": "devices.list"}
     {"cmd": "devices.revoke", "device_id": "<id>"}
     {"cmd": "pair.start"}
+    {"cmd": "friend.ask", "text": "<question>", "action": "<canonical JSON of the tool call>"}
+    {"cmd": "friend.questions"}
+    {"cmd": "friend.question.withdraw", "id": "<question id>"}
+    {"cmd": "friend.decision.use", "id": "<decision id>", "action": "<as asked>",
+     "question_sha256": "<sha256 of the question text>"}
+
+`friend.*` is how the Friend gate (rh-friend-gate, rh-friend-ask) talks to the core:
+a question goes to the phone through friend.questions; a signed friend.decide
+answers it; `friend.decision.use` spends an allow decision for exactly that
+action once (the first caller wins, every later one is refused). The gate has
+already checked the phone's signature itself; the socket only keeps the count.
 
 `pair.start` is a conversation. The core answers with
 `{"event": "pair.code", "string", "expires"}`, then, when a phone's /v1/pair
@@ -126,6 +137,39 @@ async def _dispatch(
             await _send(writer, {"ok": True, "device_id": target, "status": "revoked"})
     elif cmd == "pair.start":
         await _pair(core, reader, writer)
+    elif cmd == "friend.ask":
+        try:
+            question = core.ask(str(msg.get("text") or ""), str(msg.get("action") or ""))
+        except ValueError as e:
+            await _send(writer, {"ok": False, "error": "bad_request", "message": str(e)})
+        else:
+            await _send(writer, {"ok": True, **question.to_api()})
+    elif cmd == "friend.questions":
+        await _send(
+            writer, {"ok": True, "questions": [q.to_api() for q in core.store.open_questions()]}
+        )
+    elif cmd == "friend.question.withdraw":
+        target = msg.get("id")
+        if not isinstance(target, str) or not core.withdraw(target):
+            await _send(
+                writer, {"ok": False, "error": "not_found", "message": f"no open question {target}"}
+            )
+        else:
+            await _send(writer, {"ok": True, "id": target, "status": "withdrawn"})
+    elif cmd == "friend.decision.use":
+        decision_id, action, digest = msg.get("id"), msg.get("action"), msg.get("question_sha256")
+        if not all(isinstance(v, str) and v for v in (decision_id, action, digest)):
+            await _send(
+                writer,
+                {"ok": False, "error": "bad_request", "message": "id, action, question_sha256"},
+            )
+        else:
+            await _send(
+                writer,
+                core.use_decision(
+                    str(decision_id), action=str(action), question_sha256_=str(digest)
+                ),
+            )
     else:
         await _send(
             writer, {"ok": False, "error": "bad_request", "message": f"unknown command {cmd!r}"}

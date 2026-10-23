@@ -1,14 +1,15 @@
 openapi: 3.1.0
 info:
   title: RemoteHands core API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
     signing scheme below applies to every operation unless it says otherwise.
 
     Every operation carries two extensions:
       x-rh-op   the `op` value that must appear in the signed object;
-      x-rh-key  the key level the core requires (normal | critical | none).
+      x-rh-key  the key level the core requires (normal | critical | none;
+                normal|critical when the body decides, see friend.decide).
 
     Signed request (SPEC §4.3):
       1. POST /v1/challenge -> nonce (32 bytes, single use, TTL 60 s).
@@ -551,6 +552,104 @@ paths:
         "400": {$ref: "#/components/responses/Rejected"}
         "401": {$ref: "#/components/responses/Rejected"}
         "403": {$ref: "#/components/responses/Rejected"}
+  /v1/friend/questions:
+    get:
+      operationId: friend.questions
+      summary: What Friend is waiting for the owner to decide
+      description: |
+        Open questions, oldest first. Friend asks before a protected action (one exact
+        tool call); the phone shows `text` and `action` in full, no truncation, and
+        answers with friend.decide. `action` is canonical JSON (RFC 8785) of
+        {"input": <tool input>, "tool": "<tool name>"}: the call as the Friend gate
+        will see it. The phone must not re-encode it: the decision carries it as is.
+        A question leaves the list once it is answered or withdrawn. Home shows the
+        same questions as `rh.questions` rows (data.get). Vectors: vectors/friend_decide.json.
+      x-rh-op: friend.questions
+      x-rh-key: normal
+      responses:
+        "200":
+          description: Open questions
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [questions, server_time]
+                properties:
+                  questions:
+                    type: array
+                    items: {$ref: "#/components/schemas/FriendQuestion"}
+                  server_time: {$ref: "#/components/schemas/Timestamp"}
+              example:
+                questions:
+                  - id: 7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d
+                    text: "Resume the paused agent (pid 4242)? It was paused at 03:12 for an upload without your yes."
+                    action: '{"input":{"command":"kill -CONT 4242","description":"resume the paused agent"},"tool":"Bash"}'
+                    asked_at: "2026-10-23T03:12:05Z"
+                server_time: "2026-10-23T03:12:30Z"
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
+  /v1/friend/decide:
+    post:
+      operationId: friend.decide
+      summary: The owner's decision on one Friend question
+      description: |
+        Body {"to":"Friend","id":<question id>,"question_sha256","action","decision"}:
+        `question_sha256` is sha256 of the question `text` exactly as shown (UTF-8),
+        `action` is the question's action exactly as received, `decision` is allow or
+        deny. The key level follows the decision: allow is signed with the critical
+        key (a fresh Face ID), deny with the normal key; the other way round is
+        wrong_key_level. Checks, in order: the signed-request checks with the key the
+        object names (malformed_auth … body_mismatch), then bad_request when the body
+        does not fit, wrong_key_level when the key does not fit the decision, then
+        bad_request when the question is unknown, not open any more, or its text hash
+        or action differ from the body.
+
+        Accepted: the question is closed, the request is kept exactly as received
+        (auth header, signature, body bytes) under spool_id = first 32 hex of
+        sha256(nonce), the bridge types ⟦rh:<spool_id>⟧ into the Friend session, and
+        the Friend verifier re-checks the phone's signature. An allow decision lets
+        the Friend gate run exactly that action once, within the gate's window
+        (default 120 s after the signed `ts`); the core spends it on the gate's request
+        over its admin socket, first use wins. Vectors: vectors/friend_decide.json.
+      x-rh-op: friend.decide
+      x-rh-key: normal|critical
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/FriendDecision"}
+            example:
+              to: Friend
+              id: 7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d
+              question_sha256: 2b6e1a2f3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7
+              action: '{"input":{"command":"kill -CONT 4242","description":"resume the paused agent"},"tool":"Bash"}'
+              decision: allow
+      responses:
+        "200":
+          description: Accepted, recorded and handed to the Friend inbox
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, question_id, decision, accepted_at]
+                properties:
+                  id: {type: string, pattern: "^[0-9a-f]{32}$", description: spool_id of the decision envelope}
+                  question_id: {type: string, pattern: "^[0-9a-f]{32}$"}
+                  decision: {enum: [allow, deny]}
+                  accepted_at: {$ref: "#/components/schemas/Timestamp"}
+              example:
+                id: 4f1e2d3c4b5a69788796a5b4c3d2e1f0
+                question_id: 7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d
+                decision: allow
+                accepted_at: "2026-10-23T03:13:02Z"
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
 components:
   headers:
     ServerSig:
@@ -666,6 +765,29 @@ components:
         detail: {type: string}
         device: {$ref: "#/components/schemas/DeviceId"}
         op: {type: string}
+    FriendQuestion:
+      type: object
+      additionalProperties: false
+      required: [id, text, action, asked_at]
+      properties:
+        id: {type: string, pattern: "^[0-9a-f]{32}$"}
+        text: {type: string, minLength: 1, maxLength: 8000, description: Shown in full}
+        action:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          description: 'Canonical JSON {"input": <tool input>, "tool": "<name>"}; shown and signed as is'
+        asked_at: {$ref: "#/components/schemas/Timestamp"}
+    FriendDecision:
+      type: object
+      additionalProperties: false
+      required: [to, id, question_sha256, action, decision]
+      properties:
+        to: {type: string, const: Friend}
+        id: {type: string, pattern: "^[0-9a-f]{32}$", description: The question answered}
+        question_sha256: {type: string, pattern: "^[0-9a-f]{64}$", description: sha256 of the question text as shown}
+        action: {type: string, minLength: 1, maxLength: 65536, description: The question's action, unchanged}
+        decision: {enum: [allow, deny]}
     QuickItem:
       type: object
       additionalProperties: false

@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import re
+import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,11 +30,20 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from rh_common import __version__
 from rh_common.crypto import b64e, public_x963, sha256_hex, sign_der
 from rh_common.friend import (
+    OP_DECIDE,
+    OP_QUESTIONS,
     OP_SEND,
     DeviceEntry,
+    FriendDecision,
+    Question,
     build_devices_doc,
+    check_action,
+    check_question_text,
     envelope_from_headers,
     parse_body,
+    parse_decide_body,
+    question_id,
+    question_sha256,
     spool_id,
 )
 from rh_common.protocol import (
@@ -60,7 +70,7 @@ from rh_core.data import DataSources, parse_ids
 from rh_core.journal import Journal
 from rh_core.pairing import Candidate, Pairing, Session
 from rh_core.peers import LocalPeers, PeerLookup
-from rh_core.store import Store
+from rh_core.store import DecisionRow, Store
 from rh_core.system import PsutilProbe, SystemProbe
 
 _DEVICE_RE = re.compile(r"\A[0-9a-f]{32}\Z")
@@ -126,6 +136,7 @@ class Core:
             core_version=__version__,
             agent_version=lambda: None,  # rh-agent arrives at stage 3
             clock=self.clock,
+            questions=self.store.open_questions,
         )
         self.export_devices()
 
@@ -186,6 +197,87 @@ class Core:
             with contextlib.suppress(Exception):
                 await conn.websocket.close(code=WS_CLOSE_REVOKED)
         return True
+
+    # --- Friend questions and decisions -----------------------------------------
+
+    def ask(self, text: str, action: str) -> Question:
+        """Record a question from the Friend gate (admin socket); the phone lists it."""
+        text = check_question_text(text)
+        action = check_action(action)
+        now = self.clock()
+        question = Question(
+            id=question_id(text, action, b64e(secrets.token_bytes(16))),
+            text=text,
+            action=action,
+            asked_at=format_ts(now),
+        )
+        self.store.add_question(question)
+        self.journal.append(
+            "friend.question",
+            id=question.id,
+            question_sha256=question_sha256(text),
+            action_sha256=sha256_hex(action.encode("utf-8")),
+        )
+        return question
+
+    def withdraw(self, question_id_: str) -> bool:
+        ok = self.store.withdraw_question(question_id_, now=self.clock())
+        if ok:
+            self.journal.append("friend.question.withdrawn", id=question_id_)
+        return ok
+
+    def check_decision(self, decision: FriendDecision) -> str | None:
+        """Why a decision does not fit its question (bad_request message), or None."""
+        found = self.store.question(decision.id)
+        if found is None:
+            return f"no question {decision.id}"
+        question, status = found
+        if status != "open":
+            return f"question {decision.id} is {status}"
+        if decision.question_sha256 != question_sha256(question.text):
+            return "question_sha256 does not match the question asked"
+        if decision.action != question.action:
+            return "action does not match the question asked"
+        return None
+
+    def use_decision(
+        self, decision_id: str, *, action: str, question_sha256_: str
+    ) -> dict[str, Any]:
+        """Spend an allow decision for exactly this action: the first use wins.
+
+        Returns {"ok": True, "decision": ...} or {"ok": False, "error": code, "message"}.
+        Codes: not_found, mismatch, denied, already_used."""
+        row = self.store.decision(decision_id)
+        if row is None:
+            return _refused("not_found", f"no decision {decision_id}")
+        found = self.store.question(row.question_id)
+        if found is None:
+            return _refused("mismatch", "the decision's question is gone")
+        question, _ = found
+        if (
+            row.action != action
+            or question.action != action
+            or row.question_sha256 != question_sha256_
+            or question_sha256(question.text) != question_sha256_
+        ):
+            return _refused("mismatch", "action or question do not match the decision")
+        if row.decision != "allow":
+            return _refused("denied", "the owner denied this action")
+        if not self.store.use_decision(decision_id, now=self.clock()):
+            self.journal.append("friend.decision.refused", id=decision_id, reason="already_used")
+            return _refused("already_used", "this decision was already used")
+        self.journal.append(
+            "friend.decision.used",
+            id=decision_id,
+            question_id=row.question_id,
+            action_sha256=sha256_hex(action.encode("utf-8")),
+        )
+        return {
+            "ok": True,
+            "id": decision_id,
+            "question_id": row.question_id,
+            "used_at": format_ts(self.clock()),
+        }
 
     def replaced_by(self, req: PairRequest) -> list[str]:
         """Devices one `y` revokes (SPEC §4.2): `replaces`, else active ones with the same name."""
@@ -361,6 +453,18 @@ async def quick_list(core: Core, verdict: Verdict, body: bytes) -> tuple[int, di
     return 200, {"items": []}  # quick.pin / quick.unpin arrive at stage 5
 
 
+async def friend_questions(core: Core, verdict: Verdict, body: bytes) -> tuple[int, dict[str, Any]]:
+    """friend.questions: what Friend is waiting for the owner to decide, oldest first."""
+    return 200, {
+        "questions": [q.to_api() for q in core.store.open_questions()],
+        "server_time": format_ts(core.clock()),
+    }
+
+
+def _refused(code: str, message: str) -> dict[str, Any]:
+    return {"ok": False, "error": code, "message": message}
+
+
 async def friend_send(request: Request) -> Response:
     """friend.send: verify like any signed operation, then spool the request exactly as
     received, so the Friend verifier can check the phone's signature itself."""
@@ -394,6 +498,99 @@ async def friend_send(request: Request) -> Response:
     )
     return core.signed(
         200, {"id": sid, "message_id": message.id, "accepted_at": format_ts(core.clock())}, nonce
+    )
+
+
+async def friend_decide(request: Request) -> Response:
+    """friend.decide: the owner's answer to a question. Verified like any signed operation
+    with the key the object names; then the body must fit, the key level must fit the
+    decision (allow: critical, deny: normal) and the decision must answer an open question
+    exactly. Accepted: recorded, spooled as received for the Friend verifier, question closed."""
+    core: Core = request.app.state.core
+    body = await request.body()
+    try:
+        key: KeyLevel = parse_auth(request.headers.get(HEADER_AUTH))[0].key
+    except ProtocolError:
+        key = "normal"  # the verification below reports malformed_auth
+    verdict = _verify(core, request.headers, body, OP_DECIDE, key, request.client, journal=False)
+    decision: FriendDecision | None = None
+    if verdict.error is None:
+        try:
+            decision = parse_decide_body(body)
+            if decision.key_level != key:
+                raise ProtocolError(
+                    "wrong_key_level",
+                    f"{OP_DECIDE} {decision.decision} requires the {decision.key_level} key",
+                )
+            problem = core.check_decision(decision)
+            if problem is not None:
+                raise ValueError(problem)
+        except ProtocolError as e:
+            verdict = Verdict(obj=verdict.obj, device=verdict.device, error=e, consume_nonce=False)
+        except ValueError as e:
+            verdict = Verdict(
+                obj=verdict.obj,
+                device=verdict.device,
+                error=ProtocolError("bad_request", str(e)),
+                consume_nonce=False,
+            )
+    _journal_request(core, OP_DECIDE, verdict, request.client)
+    nonce = verdict.obj.nonce if verdict.obj else ""
+    if (
+        verdict.error is not None
+        or verdict.device is None
+        or verdict.obj is None
+        or decision is None
+    ):
+        error = verdict.error or ProtocolError("malformed_auth", "bad friend.decide")
+        return core.refuse(error, nonce)
+    sid = spool_id(nonce)
+    now = core.clock()
+    row = DecisionRow(
+        id=sid,
+        question_id=decision.id,
+        device=verdict.device.id,
+        key=key,
+        decision=decision.decision,
+        question_sha256=decision.question_sha256,
+        action=decision.action,
+        signed_at=verdict.obj.ts,
+        accepted_at=format_ts(now),
+        used_at=None,
+    )
+    if not core.store.answer_question(row):  # a second answer raced this one
+        error = ProtocolError("bad_request", f"question {decision.id} is already answered")
+        core.journal.append(
+            "request",
+            op=OP_DECIDE,
+            device=verdict.device.id,
+            result="rejected",
+            reason=error.code,
+            detail=error.message,
+            peer=_peer(request),
+        )
+        return core.refuse(error, nonce)
+    envelope = envelope_from_headers(request.headers, body)
+    _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
+    core.journal.append(
+        "friend.decision",
+        device=verdict.device.id,
+        id=sid,
+        question_id=decision.id,
+        decision=decision.decision,
+        key=key,
+        action_sha256=sha256_hex(decision.action.encode("utf-8")),
+        body_sha256=sha256_hex(body),
+    )
+    return core.signed(
+        200,
+        {
+            "id": sid,
+            "question_id": decision.id,
+            "decision": decision.decision,
+            "accepted_at": format_ts(now),
+        },
+        nonce,
     )
 
 
@@ -648,6 +845,12 @@ def create_app(
         ),
         Route("/v1/quick", signed_endpoint("quick.list", "normal", quick_list), methods=["GET"]),
         Route("/v1/friend", friend_send, methods=["POST"]),
+        Route(
+            "/v1/friend/questions",
+            signed_endpoint(OP_QUESTIONS, "normal", friend_questions),
+            methods=["GET"],
+        ),
+        Route("/v1/friend/decide", friend_decide, methods=["POST"]),
         WebSocketRoute("/v1/ws", ws_open),
     ]
     app = Starlette(routes=routes, lifespan=lifespan)
