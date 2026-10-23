@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
 from collections.abc import Callable, Iterator
 from datetime import timedelta
@@ -33,7 +34,7 @@ from rh_common.friend import (
     parse_envelope,
     question_sha256,
 )
-from rh_common.protocol import parse_ts
+from rh_common.protocol import format_ts, parse_ts
 from rh_core import logfeed
 from rh_core.app import Core, create_app
 from rh_core.config import dev_config, to_toml
@@ -554,13 +555,126 @@ def test_gate_crash_blocks(tmp_path: Path) -> None:
 
 
 def test_gate_without_gate_table_blocks_protected_calls_only(tmp_path: Path) -> None:
-    cfg = verifier_config(tmp_path)  # no [gate]
+    cfg = verifier_config(tmp_path)  # no [gate]: the default rules tell protected from not
+    project = str(cfg.project_dir)
     out = gate.handle(
-        {"tool_name": "Bash", "tool_input": {"command": "ls"}},
-        cfg,
-        project_dir=str(cfg.project_dir),
+        {"tool_name": "Bash", "tool_input": {"command": "ls"}}, cfg, project_dir=project
+    )
+    assert out.kind == "none" and not cfg.rejected_log.exists()
+    out = gate.handle(
+        {"tool_name": "Bash", "tool_input": {"command": "kill -CONT 1"}}, cfg, project_dir=project
     )
     assert out.blocked and out.code == "no_gate_config"
+    assert json.loads(cfg.rejected_log.read_text().splitlines()[-1])["code"] == "no_gate_config"
+
+
+def test_unprotected_calls_never_reach_the_core_or_fail(tmp_path: Path) -> None:
+    """The main rule: whatever the state of the core, socket or config, a call that matches
+    no rule is left alone, and odd inputs do not crash the gate."""
+    cfg = gate_config(tmp_path)  # admin_socket does not exist: the core is "down"
+    project = str(cfg.project_dir)
+    calls: list[tuple[str, Any]] = [
+        ("Bash", {"command": "ls -la"}),
+        ("Bash", {"command": "kill -9 1"}),
+        ("Bash", {}),
+        ("Bash", None),
+        ("Bash", []),
+        ("Bash", 5),
+        ("Bash", {"command": 5}),
+        ("Bash", {"command": None}),
+        ("Write", {"file_path": None, "content": "x"}),
+        ("Write", {"file_path": ["a"], "content": "x"}),
+        ("Write", {"file_path": "/Users/owner/Friend/notes/x.md", "content": "kill -CONT 1"}),
+        ("Read", {"file_path": "/Users/owner/Friend/.claude/settings.json"}),
+        ("Edit", {"file_path": "notes/x.md", "old_string": "a", "new_string": "b"}),
+        ("mcp__x__y", {"deep": {"nest": [{"a": 1}]}}),
+        ("", None),
+    ]
+    for tool, tool_input in calls:
+        out = gate.handle(
+            {"tool_name": tool, "tool_input": tool_input, "cwd": "/Users/owner/Friend"},
+            cfg,
+            project_dir=project,
+        )
+        assert out.kind == "none", (tool, tool_input, out)
+    assert not cfg.rejected_log.exists()
+    # The same calls with no CLAUDE_PROJECT_DIR at all: still none.
+    for tool, tool_input in calls:
+        assert (
+            gate.handle({"tool_name": tool, "tool_input": tool_input}, cfg, project_dir=None).kind
+            == "none"
+        )
+    # A protected call in that state is blocked, for the reason that applies.
+    protected = {"tool_name": "Bash", "tool_input": {"command": "kill -CONT 1"}}
+    out = gate.handle(protected, cfg, project_dir=None)
+    assert out.blocked and out.code == "no_project_dir"
+    out = gate.handle(protected, cfg, project_dir=project)
+    assert out.blocked and out.code == "no_decision"  # no allow to spend: the core is not asked
+
+
+def test_relative_paths_are_resolved_against_cwd() -> None:
+    rules = default_rules()
+    cwd = "/Users/owner/Friend"
+    assert gate.protected_by(rules, "Write", {"file_path": "CLAUDE.md", "content": ""}, cwd=cwd)
+    assert gate.protected_by(rules, "Write", {"file_path": "CLAUDE.md", "content": ""})  # no cwd
+    assert gate.protected_by(rules, "Edit", {"file_path": ".claude/settings.json"}, cwd=cwd)
+    assert gate.protected_by(rules, "Edit", {"file_path": "./.claude/settings.local.json"}, cwd=cwd)
+    assert gate.protected_by(rules, "Write", {"file_path": "~/Friend/.claude/settings.json"})
+    assert gate.protected_by(rules, "Write", {"file_path": "../Friend/CLAUDE.md"}, cwd=cwd)
+    assert gate.protected_by(rules, "Write", {"file_path": "~/.ssh/authorized_keys"})
+    assert not gate.protected_by(rules, "Write", {"file_path": "notes/CLAUDE.md.bak"}, cwd=cwd)
+    assert not gate.protected_by(rules, "Edit", {"file_path": "notes/x.md"}, cwd=cwd)
+    assert not gate.protected_by(
+        rules, "Write", {"file_path": "/Users/owner/Friend/notes/a"}, cwd=cwd
+    )
+    # The action text keeps the input as given: the phone signs what the call carries.
+    assert '"file_path":"CLAUDE.md"' in action_text(
+        "Write", {"file_path": "CLAUDE.md", "content": ""}
+    )
+
+
+def test_a_plain_ask_call_is_not_protected(tmp_path: Path) -> None:
+    import dataclasses
+
+    program = tmp_path / "venv" / "bin" / "rh-friend-ask"
+    program.parent.mkdir(parents=True)
+    program.write_text("#!/bin/sh\n")
+    base = gate_config(tmp_path)
+    assert base.gate is not None
+    cfg = dataclasses.replace(base, gate=dataclasses.replace(base.gate, ask=program))
+    project = str(cfg.project_dir)
+    question = "The owner allowed the upload at 03:12; record it in CGC and resume pid 4242"
+
+    def verdict(command: str) -> str:
+        out = gate.handle(
+            {"tool_name": "Bash", "tool_input": {"command": command, "description": "ask"}},
+            cfg,
+            project_dir=project,
+        )
+        return out.kind
+
+    plain = f'"{program}" --question "{question}" --bash "kill -CONT 4242" --description "resume"'
+    assert verdict(plain) == "none"
+    assert verdict(f"{program} --list") == "none"
+    assert (
+        verdict(
+            f"{program} --question '{question}; kill -CONT 1 | tee x' --bash ls --description d"
+        )
+        == "none"
+    )
+    # More than the one command, or not the program itself: the rules decide as usual.
+    assert verdict(f"{program} --question x --bash ls --description d; kill -CONT 1") == "block"
+    assert verdict(f"{program} --question x --bash ls --description d && kill -CONT 1") == "block"
+    assert verdict(f"{program} --question x --bash ls --description d\nkill -CONT 1") == "block"
+    assert verdict(f"{program} --question x > ~/Friend/.claude/settings.json") == "block"
+    assert verdict(f'{program} --question "$(kill -CONT 1)"') == "block"
+    assert verdict(f"{program} --question `kill -CONT 1`") == "block"
+    assert verdict(f"rh-friend-ask --question '{question}'") == "block"  # not by its full path
+    assert verdict(f"{tmp_path}/other/rh-friend-ask --question '{question}'") == "block"
+    assert verdict(f"{program} --question '{question}") == "block"  # unbalanced quote
+    # Without [gate] ask, the program next to the running interpreter is the exempt one.
+    assert gate.ask_program(None).name == "rh-friend-ask"
+    assert gate.ask_program(base.gate).name == "rh-friend-ask"
 
 
 # --- the hook process ----------------------------------------------------------------------------
@@ -596,9 +710,11 @@ def write_toml(cfg: FriendConfig, path: Path, *, rules: bool = True) -> None:
 
 
 def run_gate(
-    toml: Path, event: Any, project: Path, *extra: str
+    toml: Path, event: Any, project: Path | None, *extra: str
 ) -> subprocess.CompletedProcess[str]:
-    env_ = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+    env_ = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    if project is not None:
+        env_["CLAUDE_PROJECT_DIR"] = str(project)
     return subprocess.run(
         [sys.executable, "-m", "rh_friend.gate", "--config", str(toml), *extra],
         input=event if isinstance(event, str) else json.dumps(event),
@@ -636,6 +752,58 @@ def test_hook_process_end_to_end(tmp_path: Path) -> None:
     other.mkdir()
     r = run_gate(toml, protected, other, "--project", str(other))
     assert r.returncode == 2 and "project_dir differ" in r.stderr
+
+
+def test_hook_process_never_blocks_unprotected_calls(tmp_path: Path) -> None:
+    """No CLAUDE_PROJECT_DIR, no config, no [gate], an unwritable anchor: the unprotected
+    call passes silently every time, the protected one is blocked with the reason."""
+    cfg = gate_config(tmp_path)
+    cfg.project_dir.mkdir(exist_ok=True)
+    toml = tmp_path / "friend.toml"
+    write_toml(cfg, toml)
+    plain = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": str(cfg.project_dir)}
+    protected = {"tool_name": "Bash", "tool_input": {"command": "kill -CONT 1"}}
+    relative = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "CLAUDE.md", "content": ""},
+        "cwd": str(cfg.project_dir),
+    }
+    project = cfg.project_dir
+    # No CLAUDE_PROJECT_DIR.
+    for extra in ((), ("--project", str(project))):
+        r = run_gate(toml, plain, None, *extra)
+        assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), extra
+        r = run_gate(toml, protected, None, *extra)
+        assert r.returncode == 2 and "no_project_dir" in r.stderr, extra
+    # No config file (the default rules tell the calls apart).
+    missing = tmp_path / "nope.toml"
+    assert (
+        run_gate(missing, plain, project).returncode,
+        run_gate(missing, plain, project).stderr,
+    ) == (0, "")
+    r = run_gate(missing, protected, project)
+    assert r.returncode == 2 and "blocked (config)" in r.stderr
+    r = run_gate(missing, relative, project)
+    assert r.returncode == 2 and "blocked (config)" in r.stderr
+    # A config without [gate].
+    bare = tmp_path / "bare.toml"
+    bare.write_text(
+        "\n".join(
+            line
+            for line in toml.read_text().splitlines()
+            if not line.startswith(
+                ("[", "admin_socket", "decide_window", "name", "tools", "field", "match")
+            )
+        )
+        + "\n"
+    )
+    assert run_gate(bare, plain, project).returncode == 0
+    r = run_gate(bare, protected, project)
+    assert r.returncode == 2 and "no_gate_config" in r.stderr
+    # --require-protected with a config this user can write.
+    assert run_gate(toml, plain, project, "--require-protected").returncode == 0
+    r = run_gate(toml, protected, project, "--require-protected")
+    assert r.returncode == 2 and "blocked (config)" in r.stderr
 
 
 def test_hook_process_allows_with_a_label(tmp_path: Path, short_dir: Path) -> None:
@@ -696,14 +864,32 @@ def test_ask_cli(env: Any, tmp_path: Path, capsys: Any) -> None:
     write_toml(cfg, toml)
     assert ask.main(["--config", str(toml), "--list"]) == 0
     assert "no open questions" in capsys.readouterr().out
-    rc = ask.main(["--config", str(toml), "--question", "Resume pid 1?", "--bash", "kill -CONT 1"])
+    # --bash without the description Claude Code will send: a clear error, nothing asked.
+    with pytest.raises(SystemExit) as stop:
+        ask.main(["--config", str(toml), "--question", "Resume pid 1?", "--bash", "kill -CONT 1"])
+    assert stop.value.code == 2 and "--bash needs --description" in capsys.readouterr().err
+    assert core.store.open_questions() == []
+    rc = ask.main(
+        [
+            "--config",
+            str(toml),
+            "--question",
+            "Resume pid 1?",
+            "--bash",
+            "kill -CONT 1",
+            "--description",
+            "resume",
+        ]
+    )
     assert rc == 0
     out = capsys.readouterr().out
-    assert "asked: " in out and '"command": "kill -CONT 1"' in out
+    assert "asked: " in out and '"command": "kill -CONT 1", "description": "resume"' in out
     qid = out.split("asked: ")[1].split()[0]
     questions = core.store.open_questions()
     assert [q.id for q in questions] == [qid]
-    assert questions[0].action == action_text("Bash", {"command": "kill -CONT 1"})
+    assert questions[0].action == action_text(
+        "Bash", {"command": "kill -CONT 1", "description": "resume"}
+    )
     rc = ask.main(
         [
             "--config",
@@ -728,14 +914,22 @@ def test_ask_cli(env: Any, tmp_path: Path, capsys: Any) -> None:
         ask.main(
             ["--config", str(toml), "--question", "x", "--tool", "Bash", "--input", "{not json"]
         )
-    assert ask.main(["--config", str(toml), "--question", "  ", "--bash", "ls"]) == 1
+    assert (
+        ask.main(["--config", str(toml), "--question", "  ", "--bash", "ls", "--description", "d"])
+        == 1
+    )
+    # The refusal is in the core's journal.
+    assert any(e["event"] == "friend.question.refused" for e in events(core))
 
 
 def test_ask_cli_without_core(tmp_path: Path, capsys: Any) -> None:
     cfg = gate_config(tmp_path)
     toml = tmp_path / "friend.toml"
     write_toml(cfg, toml)
-    assert ask.main(["--config", str(toml), "--question", "x", "--bash", "ls"]) == 2
+    assert (
+        ask.main(["--config", str(toml), "--question", "x", "--bash", "ls", "--description", "d"])
+        == 2
+    )
     assert "not running" in capsys.readouterr().err
 
 
@@ -832,6 +1026,23 @@ def test_gate_config_rejects_bad_rules(tmp_path: Path) -> None:
         ("Bash", {"command": "launchctl bootout gui/501 ~/Library/LaunchAgents/com.x.plist"}, True),
         ("Bash", {"command": "launchctl list | grep com.x"}, False),
         ("Read", {"file_path": "/Users/owner/Friend/.claude/settings.json"}, False),
+        # Spellings a review found slipping through.
+        ("Bash", {"command": "/bin/kill -CONT 4242"}, True),
+        ("Bash", {"command": " kill -CONT 4242"}, True),
+        ("Bash", {"command": "echo hi\nkill -CONT 4242"}, True),
+        ("Bash", {"command": "command kill -CONT 4242"}, True),
+        ("Bash", {"command": "bash -c 'kill -CONT 4242'"}, True),
+        ("Bash", {"command": "pgrep -f Agent | xargs kill -CONT"}, True),
+        ("Bash", {"command": "python3 -c 'import os,signal; os.kill(4242, signal.SIGCONT)'"}, True),
+        ("Bash", {"command": "kill -s 19 4242"}, True),
+        ("Bash", {"command": "kill -18 4242"}, True),
+        ("Bash", {"command": "kill -s SIGSTOP 4242"}, True),
+        ("Bash", {"command": "cd ~/Friend/.claude && cat > settings.json"}, True),
+        ("Bash", {"command": "zsh -c 'cp x ~/Friend/.claude/settings.json'"}, True),
+        ("Bash", {"command": "skill -CONT 1"}, False),
+        ("Bash", {"command": "grep SIGSTOP notes/x.md"}, False),
+        ("Write", {"file_path": "CLAUDE.md", "content": ""}, True),
+        ("Write", {"file_path": "settings.json", "content": ""}, True),
     ],
 )
 def test_default_rules(tool: str, tool_input: dict[str, Any], protected: bool) -> None:
@@ -858,6 +1069,7 @@ def test_rhcore_friend_config_includes_the_gate(short_dir: Path, tmp_path: Path)
     )
     assert [r.name for r in cfg.gate.protected] == [r.name for r in default_rules()]
     assert gate.protected_by(cfg.gate.protected, "Bash", {"command": "kill -CONT 1"})
+    assert cfg.gate.ask is not None and cfg.gate.ask.name == "rh-friend-ask"
 
 
 def test_store_spends_a_decision_once() -> None:
@@ -922,6 +1134,162 @@ def test_core_use_decision_checks_everything(core: Core) -> None:
         == "already_used"
     )
     assert sha256_hex(QUESTION.action.encode()) in {e.get("action_sha256") for e in events(core)}
+    refused = [e for e in events(core) if e["event"] == "friend.decision.refused"]
+    assert [e["reason"] for e in refused] == ["not_found", "mismatch", "mismatch", "already_used"]
+    assert all(len(e["action_sha256"]) == 64 for e in refused)
+
+
+def test_core_use_decision_checks_freshness_and_key_level(core: Core) -> None:
+    """The core does not take the gate's word: an allow with the normal key, or older than
+    the window by the phone's or its own clock, is refused and journaled."""
+    digest = question_sha256(QUESTION.text)
+    fresh = format_ts(NOW)
+    old = format_ts(NOW - timedelta(seconds=121))
+
+    def put(sid: str, *, key: str = "critical", signed: str = fresh, accepted: str = fresh) -> None:
+        core.store.put_decision(
+            DecisionRow(
+                id=sid,
+                question_id=QUESTION.id,
+                device=FIX["devices"][0]["id"],
+                key=key,
+                decision="allow",
+                question_sha256=digest,
+                action=QUESTION.action,
+                signed_at=signed,
+                accepted_at=accepted,
+                used_at=None,
+            )
+        )
+
+    def use(sid: str) -> str:
+        answer = core.use_decision(sid, action=QUESTION.action, question_sha256_=digest)
+        return "ok" if answer.get("ok") else str(answer["error"])
+
+    put("1" * 32, key="normal")
+    put("2" * 32, signed=old)
+    put("3" * 32, accepted=old)
+    put("4" * 32, signed=format_ts(NOW - timedelta(seconds=120)))  # just inside
+    assert use("1" * 32) == "wrong_key_level"
+    assert use("2" * 32) == "expired"
+    assert use("3" * 32) == "expired"
+    assert use("4" * 32) == "ok"
+    reasons = [e["reason"] for e in events(core) if e["event"] == "friend.decision.refused"]
+    assert reasons == ["wrong_key_level", "expired", "expired"]
+    # Nothing was spent by a refusal.
+    for sid in ("1" * 32, "2" * 32, "3" * 32):
+        row = core.store.decision(sid)
+        assert row is not None and row.used_at is None
+
+
+def test_newer_deny_or_question_supersedes_an_unused_allow(env: Any, tmp_path: Path) -> None:
+    """Allow, then Deny on the same action → block; a new question about the same action
+    also voids what was allowed and not used. The core refuses `superseded`, the gate blocks."""
+    core, client, clock, _ = env
+    phone = Phone()
+    pair(core, client, phone)
+    cfg = friend_cfg(core, tmp_path)
+    project = str(cfg.project_dir)
+    tool_input = {"command": "kill -CONT 4242", "description": "resume"}
+    event = {"tool_name": "Bash", "tool_input": tool_input}
+    action = action_text("Bash", tool_input)
+
+    # Allow, then a newer Deny on the same action.
+    q1 = core.ask("Resume?", action)
+    r = signed(
+        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "critical", decide_body(q1, "allow")
+    )
+    assert r.status_code == 200
+    allow_sid = r.json()["id"]
+    clock.offset += timedelta(seconds=1)
+    q2 = core.ask("Really resume?", action)  # the question alone voids the unused allow
+    voided = [e for e in events(core) if e["event"] == "friend.decision.voided"]
+    assert [(e["id"], e["reason"]) for e in voided] == [(allow_sid, "new_question")]
+    row = core.store.decision(allow_sid)
+    assert row is not None and row.voided_at is not None and row.voided_by == f"question:{q2.id}"
+    # The gate still sees the allow as the newest envelope; the core refuses to spend it.
+    out = gate.handle(event, cfg, project_dir=project, now=clock)
+    assert out.blocked and out.code == "superseded", out
+    clock.offset += timedelta(seconds=1)
+    r = signed(
+        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "normal", decide_body(q2, "deny")
+    )
+    assert r.status_code == 200
+    out = gate.handle(event, cfg, project_dir=project, now=clock)
+    assert out.blocked and out.code == "denied", out
+
+    # A Deny arriving while an unused Allow exists voids it in the core as well.
+    q3 = core.ask("Once more?", action)
+    clock.offset += timedelta(seconds=1)
+    r = signed(
+        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "critical", decide_body(q3, "allow")
+    )
+    assert r.status_code == 200
+    allow3 = r.json()["id"]
+    q4 = core.ask("And again?", action)
+    clock.offset += timedelta(seconds=1)
+    r = signed(
+        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "normal", decide_body(q4, "deny")
+    )
+    assert r.status_code == 200
+    row = core.store.decision(allow3)
+    assert row is not None and row.voided_at is not None and row.voided_by.startswith("question:")
+    out = gate.handle(event, cfg, project_dir=project, now=clock)
+    assert out.blocked and out.code == "denied"
+    # Deny then a newer Allow: the allow stands. (The phone signs with the real clock, and a
+    # deny wins a tie within one second, so the allow must come a second later.)
+    q5 = core.ask("Last time?", action)
+    clock.offset += timedelta(seconds=1)
+    time.sleep(1.1)
+    r = signed(
+        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "critical", decide_body(q5, "allow")
+    )
+    assert r.status_code == 200
+    out = gate.handle(event, cfg, project_dir=project, now=clock)
+    assert out.kind == "allow" and out.decision_id == r.json()["id"], out
+    refused = [e["reason"] for e in events(core) if e["event"] == "friend.decision.refused"]
+    assert refused == ["superseded"]
+    assert verify(core.config.journal_dir) == []
+
+
+def test_admin_socket_takes_the_longest_action_the_contract_allows(env: Any) -> None:
+    from rh_common.friend import MAX_ACTION
+    from rh_core.admin import LINE_LIMIT
+
+    core, client, clock, _ = env
+
+    def action_of(length: int) -> str:
+        probe = action_text("Write", {"content": "", "file_path": "/x"})
+        return action_text("Write", {"content": "ё" * (length - len(probe)), "file_path": "/x"})
+
+    longest = action_of(MAX_ACTION)
+    assert len(longest) == MAX_ACTION
+    admin = Admin(core.config.admin_socket)
+    admin.send({"cmd": "friend.ask", "text": "Write it?", "action": longest})
+    answer = admin.recv()
+    admin.close()
+    assert answer["ok"] is True, answer
+    assert core.store.open_questions()[-1].action == longest
+    # The gate spends such a decision over the same socket.
+    spend = gate.spend_over_socket(friend_cfg(core, core.config.data_dir).gate)  # type: ignore[arg-type]
+    assert spend("0" * 32, longest, question_sha256("Write it?"))["error"] == "not_found"
+    # One character over the contract: refused by the core, not by the transport.
+    admin = Admin(core.config.admin_socket)
+    admin.send({"cmd": "friend.ask", "text": "Write it?", "action": action_of(MAX_ACTION + 1)})
+    answer = admin.recv()
+    admin.close()
+    assert answer["error"] == "bad_request" and "longer than" in answer["message"]
+    # A line past the transport limit: a clear refusal, the socket stays up.
+    admin = Admin(core.config.admin_socket)
+    admin.f.write('{"cmd": "friend.ask", "text": "' + "a" * (LINE_LIMIT + 10) + '"}\n')
+    admin.f.flush()
+    answer = admin.recv()
+    admin.close()
+    assert answer["error"] == "bad_request" and "one line" in answer["message"]
+    admin = Admin(core.config.admin_socket)
+    admin.send({"cmd": "status"})
+    assert admin.recv()["ok"] is True
+    admin.close()
 
 
 def test_log_feed_shows_friend_events(tmp_path: Path) -> None:
@@ -939,6 +1307,8 @@ def test_log_feed_shows_friend_events(tmp_path: Path) -> None:
     journal.append("friend.decision.used", id="d" * 32, question_id="q" * 32)
     journal.append("friend.decision.refused", id="d" * 32, reason="already_used")
     journal.append("friend.question.withdrawn", id="q" * 32)
+    journal.append("friend.decision.voided", id="d" * 32, reason="denied", by="deny:" + "e" * 32)
+    journal.append("friend.question.refused", reason="action is longer than 65536 characters")
     entries, _ = logfeed.page(tmp_path, names=lambda d: "Мой iPhone")
     assert [(e["kind"], e["title"]) for e in reversed(entries)] == [
         ("system", "Message to Friend from Мой iPhone"),
@@ -947,9 +1317,11 @@ def test_log_feed_shows_friend_events(tmp_path: Path) -> None:
         ("approval", "Friend used a decision"),
         ("approval", "Friend's decision refused: already_used"),
         ("approval", "Friend withdrew a question"),
+        ("approval", "Friend's allow superseded: denied"),
+        ("approval", "Friend's question refused"),
     ]
     approvals, _ = logfeed.page(tmp_path, names=lambda d: None, filter="approvals")
-    assert len(approvals) == 5
+    assert len(approvals) == 7
 
 
 def test_admin_socket_friend_commands_validate(env: Any) -> None:

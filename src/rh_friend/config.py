@@ -23,14 +23,22 @@ from here; nothing about a particular Mac or person is built in.
     [gate]                                       # PreToolUse gate (rh-friend-gate)
     admin_socket = "<core data_dir>/admin.sock"  # where decisions are spent, once each
     decide_window_s = 120                        # how old an allow decision may be
-    log = "~/Friend/log/rh_gate.jsonl"           # every allow the gate let through
+    log = "~/Friend/log/rh_gate.jsonl"           # every verdict on a protected call
+    ask = "<venv>/bin/rh-friend-ask"             # a plain call of this program is never
+                                                 # protected (asking must not need an answer)
 
     [[gate.protected]]                           # any matching rule makes a call protected
     name  = "resume or pause a process"
     tools = ["Bash"]                             # tool names; ["*"] for any tool
     field = "command"                            # a key of tool_input; omit for the whole input
-    match = ["<regex>", ...]                     # all must be found (re.search)
+    match = ["<regex>", ...]                     # all must be found (re.search; DOTALL,
+                                                 # MULTILINE)
     ignore_case = false
+
+The rules are a seat belt, not a sandbox: they catch the obvious spelling of a protected
+action so the owner is asked. Another spelling, a script or Python can do the same thing
+under the same user; the honest guarantee comes with separate users (stage 7), when the
+core does the dangerous actions under its own user on a signed decision.
 """
 
 from __future__ import annotations
@@ -95,6 +103,7 @@ class GateConfig:
     protected: tuple[ProtectedRule, ...]
     decide_window_s: int = DEFAULT_DECIDE_WINDOW_S
     log: Path | None = None
+    ask: Path | None = None  # rh-friend-ask; None: the one next to this interpreter
 
 
 @dataclass(frozen=True)
@@ -197,7 +206,7 @@ def _bridge(table: Any, path: Any) -> BridgeConfig:
 def _gate(table: Any, path: Any) -> GateConfig:
     if not isinstance(table, dict):
         raise ConfigError("[gate] must be a table")
-    unknown = set(table) - {"admin_socket", "decide_window_s", "log", "protected"}
+    unknown = set(table) - {"admin_socket", "decide_window_s", "log", "protected", "ask"}
     if unknown:
         raise ConfigError(f"unknown [gate] keys: {sorted(unknown)}")
     if not isinstance(table.get("admin_socket"), str) or not table["admin_socket"]:
@@ -208,6 +217,9 @@ def _gate(table: Any, path: Any) -> GateConfig:
     log = table.get("log")
     if log is not None and (not isinstance(log, str) or not log):
         raise ConfigError("[gate] log must be a path")
+    ask = table.get("ask")
+    if ask is not None and (not isinstance(ask, str) or not ask):
+        raise ConfigError("[gate] ask must be a path")
     rules = table.get("protected", [])
     if not isinstance(rules, list):
         raise ConfigError("[[gate.protected]] must be an array of tables")
@@ -215,6 +227,7 @@ def _gate(table: Any, path: Any) -> GateConfig:
         admin_socket=path(table["admin_socket"]),
         decide_window_s=window,
         log=path(log) if log else None,
+        ask=path(ask) if ask else None,
         protected=tuple(_rule(r) for r in rules),
     )
 
@@ -241,7 +254,7 @@ def _rule(doc: Any) -> ProtectedRule:
     ignore_case = doc.get("ignore_case", False)
     if not isinstance(ignore_case, bool):
         raise ConfigError(f"{where}: ignore_case must be true or false")
-    flags = re.DOTALL | (re.IGNORECASE if ignore_case else 0)
+    flags = re.DOTALL | re.MULTILINE | (re.IGNORECASE if ignore_case else 0)
     compiled = []
     for pattern in patterns:
         if not isinstance(pattern, str) or not pattern:
@@ -253,15 +266,29 @@ def _rule(doc: Any) -> ProtectedRule:
     return ProtectedRule(name=name, tools=tuple(tools), match=tuple(compiled), field=field)
 
 
-# Rules `rhcore friend-config` writes; the owner edits the file afterwards.
+# Rules `rhcore friend-config` writes; the owner edits the file afterwards. They match the
+# usual spellings, including the ones a review found slipping through (a path before kill,
+# `command kill`, `bash -c "kill …"`, `xargs kill`, `kill -s 19`, os.kill in Python). What
+# they do not catch is listed in docs/friend-gate.md, "Known limitations".
 DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
     {
         "name": "resume or pause a process (kill -CONT / -STOP)",
         "tools": ["Bash"],
         "field": "command",
+        # kill/pkill/killall anywhere (after a path, a quote, `command`, `xargs`, a newline),
+        # then CONT/STOP by name or number on the same command segment.
         "match": [
-            r"(^|[;&|(`]\s*)(sudo\s+)?(kill|pkill|killall)\b[^;&|]*"
-            r"(\s-(s\s+)?(SIG)?(CONT|STOP)\b|\s-(17|18|19)\b)"
+            r"(?<![\w.-])(kill|pkill|killall)\b[^\n;&|]*?"
+            r"(\s-(s\s+)?(SIG)?(CONT|STOP)\b|\s-(s\s+)?(17|18|19)\b)"
+        ],
+    },
+    {
+        "name": "resume or pause a process from a script (os.kill, SIGCONT, SIGSTOP)",
+        "tools": ["Bash"],
+        "field": "command",
+        "match": [
+            r"(os\.kill\s*\(|signal\.SIG(CONT|STOP)\b"
+            r"|[\"']kill[\"']\s*,\s*[\"']-(SIG)?(CONT|STOP|1[789])\b)"
         ],
     },
     {
@@ -276,9 +303,12 @@ DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
         "name": "rules and access: edit a settings or rules file",
         "tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
         "field": "file_path",
+        # The gate resolves file_path against the call's cwd first, so "CLAUDE.md" and
+        # "~/Friend/.claude/settings.json" are seen as full paths.
         "match": [
-            r"(/\.claude/|/CLAUDE\.md$|/LaunchAgents/|/LaunchDaemons/|managed-settings"
-            r"|/friend\.toml$|/core\.toml$|/\.ssh/|authorized_keys|/sudoers)"
+            r"((^|/)\.claude(/|$)|(^|/)CLAUDE\.md$|/LaunchAgents/|/LaunchDaemons/"
+            r"|managed-settings|(^|/)friend\.toml$|(^|/)core\.toml$|(^|/)\.ssh(/|$)"
+            r"|authorized_keys|/sudoers|(^|/)settings(\.local)?\.json$)"
         ],
     },
     {
@@ -286,11 +316,14 @@ DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
         "tools": ["Bash"],
         "field": "command",
         "match": [
-            r"(\.claude/|CLAUDE\.md|LaunchAgents|LaunchDaemons|managed-settings"
-            r"|friend\.toml|core\.toml|\.ssh/|authorized_keys|sudoers)",
+            r"(\.claude\b|CLAUDE\.md|LaunchAgents|LaunchDaemons|managed-settings"
+            r"|friend\.toml|core\.toml|\.ssh\b|authorized_keys|sudoers"
+            r"|settings(\.local)?\.json)",
             r"(>|\btee\b|\bsed\s+-i|\bcp\b|\bmv\b|\brm\b|\bln\b|\bchmod\b|\bchown\b"
+            r"|\btruncate\b|\binstall\b|\bpatch\b"
             r"|\blaunchctl\s+(load|unload|bootstrap|bootout|enable|disable|kickstart)"
-            r"|\bdefaults\s+write|\bpython3?\b|\bperl\b|\bruby\b|\bnode\b)",
+            r"|\bdefaults\s+write|\bpython3?\b|\bperl\b|\bruby\b|\bnode\b|\bswift\b"
+            r"|\bosascript\b|\b(ba|z)?sh\s+-c\b)",
         ],
     },
 )

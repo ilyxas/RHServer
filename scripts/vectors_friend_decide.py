@@ -248,6 +248,13 @@ def gate_cases() -> list[dict[str, Any]]:
     allow_sid = spool_id(t.nonce("fresh"))
     deny_h, deny_b = signed(decision="deny", nonce_label="for-B", p="B")
     deny_sid = spool_id(t.nonce("for-B"))
+    # The same deny signed later / earlier than the allow (same nonce: one deny per case).
+    later_deny_h, later_deny_b = signed(
+        decision="deny", nonce_label="for-B", p="B", ts=t.NOW + timedelta(seconds=10)
+    )
+    earlier_deny_h, earlier_deny_b = signed(
+        decision="deny", nonce_label="for-B", p="B", ts=t.NOW - timedelta(seconds=10)
+    )
     other_h, other_b = signed(body_bytes=body(action=OTHER_ACTION), nonce_label="used")
     other_sid = spool_id(t.nonce("used"))
     forged_h, forged_b = signed(level="normal", nonce_label="stale")
@@ -389,8 +396,34 @@ def gate_cases() -> list[dict[str, Any]]:
             "now": "now",
             "expect": {"result": "block", "code": "core_unreachable"},
         },
+        # The newest decision for an action counts; a deny wins a tie.
         {
-            "name": "deny-and-allow-both-present",
+            "name": "deny-and-allow-signed-at-the-same-time",
+            "tool": TOOL,
+            "input": TOOL_INPUT,
+            "inbox": [deny_sid, allow_sid],
+            "core": {
+                allow_sid: {**accepted[allow_sid], "used": False},
+                deny_sid: {**accepted[deny_sid], "used": False},
+            },
+            "now": "now",
+            "expect": {"result": "block", "code": "denied"},
+        },
+        {
+            "name": "allow-then-a-newer-deny",
+            "tool": TOOL,
+            "input": TOOL_INPUT,
+            "inbox": [deny_sid, allow_sid],
+            "core": {
+                allow_sid: {**accepted[allow_sid], "used": False},
+                deny_sid: {**accepted[deny_sid], "used": False},
+            },
+            "now": "now",
+            "expect": {"result": "block", "code": "denied"},
+            "_envelopes": {deny_sid: env(later_deny_h, later_deny_b)},
+        },
+        {
+            "name": "deny-then-a-newer-allow",
             "tool": TOOL,
             "input": TOOL_INPUT,
             "inbox": [deny_sid, allow_sid],
@@ -400,6 +433,7 @@ def gate_cases() -> list[dict[str, Any]]:
             },
             "now": "now",
             "expect": {"result": "allow", "decision": allow_sid},
+            "_envelopes": {deny_sid: env(earlier_deny_h, earlier_deny_b)},
         },
     ]
     for c in cases:
@@ -568,9 +602,11 @@ def friend_decide_vectors() -> dict[str, Any]:
             "core accepted (with `used`; null core = unreachable) and the clock → allow with "
             f"the decision spent, block with a code, or none (not protected); allow window "
             f"{int(DECIDE_WINDOW.total_seconds())} s after the signed ts, protected rules = "
-            "the defaults of rhcore friend-config."
+            "the defaults of rhcore friend-config. For one action the newest decision by "
+            "signed ts counts (a deny wins a tie): a deny blocks even when an older unused "
+            "allow is present."
         ),
-        "version": 1,
+        "version": 2,
         "core_pub_x963_b64": b64e(t.pub("core")),
         "verify_window_s": int(VERIFY_WINDOW.total_seconds()),
         "decide_window_s": int(DECIDE_WINDOW.total_seconds()),

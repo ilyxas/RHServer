@@ -156,6 +156,7 @@ def _friend_config(args: argparse.Namespace, out: TextIO) -> int:
         f"admin_socket = {q(cfg.admin_socket)}",
         f"decide_window_s = {int(getattr(args, 'decide_window', 120))}",
         f"log = {q(project / 'log' / 'rh_gate.jsonl')}",
+        f"ask = {q(Path(sys.argv[0]).resolve().parent / 'rh-friend-ask')}",
     ]
     for rule in default_protected(getattr(args, "owner_names", "owner|владелец")):
         lines += ["", "[[gate.protected]]", f"name = {q(rule['name'])}"]

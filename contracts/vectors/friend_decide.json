@@ -1,6 +1,6 @@
 {
-  "description": "friend.decide and friend.questions. build: question_sha256 = sha256 of the question text as shown (UTF-8); action = canonical JSON of {\"input\": <tool input>, \"tool\": <name>}; decide_body = the phone's body with sorted keys and no spaces, and the key level each decision needs. core: requests against the signed_requests.json fixture with the one open `question`; accept spools the request under spool_id = first 32 hex of sha256(nonce). envelopes: what the Friend verifier must pass or block for a pointer at `now` with a 900 s window (device list: friend.json \"valid\"). gate: a tool call, the decide envelopes in the inbox, the decisions the core accepted (with `used`; null core = unreachable) and the clock → allow with the decision spent, block with a code, or none (not protected); allow window 120 s after the signed ts, protected rules = the defaults of rhcore friend-config.",
-  "version": 1,
+  "description": "friend.decide and friend.questions. build: question_sha256 = sha256 of the question text as shown (UTF-8); action = canonical JSON of {\"input\": <tool input>, \"tool\": <name>}; decide_body = the phone's body with sorted keys and no spaces, and the key level each decision needs. core: requests against the signed_requests.json fixture with the one open `question`; accept spools the request under spool_id = first 32 hex of sha256(nonce). envelopes: what the Friend verifier must pass or block for a pointer at `now` with a 900 s window (device list: friend.json \"valid\"). gate: a tool call, the decide envelopes in the inbox, the decisions the core accepted (with `used`; null core = unreachable) and the clock → allow with the decision spent, block with a code, or none (not protected); allow window 120 s after the signed ts, protected rules = the defaults of rhcore friend-config. For one action the newest decision by signed ts counts (a deny wins a tie): a deny blocks even when an older unused allow is present.",
+  "version": 2,
   "core_pub_x963_b64": "BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=",
   "verify_window_s": 900,
   "decide_window_s": 120,
@@ -598,7 +598,7 @@
       }
     },
     {
-      "name": "deny-and-allow-both-present",
+      "name": "deny-and-allow-signed-at-the-same-time",
       "tool": "Bash",
       "input": {
         "command": "kill -CONT 4242",
@@ -606,6 +606,68 @@
       },
       "envelopes": {
         "017dbe10eb6b62590046c3ba392fcb78": "{\"auth\":\"eyJib2R5IjoiZTA1NGQyMzdhNTg0YTk1OTE5NGU5ZTdjNGQ1YjEyMmVjYmM2MTY2Y2I2OTgzNmZjZjczZGM0NTQ1OGI3ZmM3YiIsImRldmljZSI6IjBmOGEyNzY2ZDI2NDY0NDZiOWExNWMwZmVkY2FjZDUzIiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IjdrZlBsekxudXJKandCd01KMjFZeCtkbjBlNDJwZXJtcWhFU29KZTUrQWM9Iiwib3AiOiJmcmllbmQuZGVjaWRlIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9\",\"body\":\"eyJhY3Rpb24iOiJ7XCJpbnB1dFwiOntcImNvbW1hbmRcIjpcImtpbGwgLUNPTlQgNDI0MlwiLFwiZGVzY3JpcHRpb25cIjpcInJlc3VtZSB0aGUgcGF1c2VkIGFnZW50XCJ9LFwidG9vbFwiOlwiQmFzaFwifSIsImRlY2lzaW9uIjoiZGVueSIsImlkIjoiN2QzYzBiOWE4ZTVmNGE2YjFjMmQzZTRmNWE2YjdjOGQiLCJxdWVzdGlvbl9zaGEyNTYiOiIxNTllMWVkOTk1OTRjNmQzOWQyY2UzNGU4ZWFjNjk0YTQwZmIzMmI4YzdhNGI0YjFkMWQ4ZjgxMzhiZTdjOTMyIiwidG8iOiJGcmllbmQifQ==\",\"sig\":\"MEYCIQCJQE9paapfb/cNBWIcwRXQOt6FJmCVLQ0eVoY/MtqM8wIhAMJiYJVoJsbMrUTfsFcSTJskVVPASBYXComuMmHRj85H\",\"v\":1}",
+        "b2d34343d8e0e506c6fd53cfc3eb3911": "{\"auth\":\"eyJib2R5IjoiMGM2YmI5ODU0ZTVmYjFmZjY4YTA4ZDIyZDdlMTZjMzhmMTNhYzJkMjQ3MDg5ZGFmOGM5ZDE4NDdjMTg4YWFkNCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJjcml0aWNhbCIsIm5vbmNlIjoiQ2E0Wnhpd3FTc00ydlptSktWRzRmaGUwaGp2VGpwRXlXYTM3V1d6Rjg5OD0iLCJvcCI6ImZyaWVuZC5kZWNpZGUiLCJ0cyI6IjIwMjYtMTAtMTlUMTI6MDA6MDBaIiwidiI6MX0=\",\"body\":\"eyJhY3Rpb24iOiJ7XCJpbnB1dFwiOntcImNvbW1hbmRcIjpcImtpbGwgLUNPTlQgNDI0MlwiLFwiZGVzY3JpcHRpb25cIjpcInJlc3VtZSB0aGUgcGF1c2VkIGFnZW50XCJ9LFwidG9vbFwiOlwiQmFzaFwifSIsImRlY2lzaW9uIjoiYWxsb3ciLCJpZCI6IjdkM2MwYjlhOGU1ZjRhNmIxYzJkM2U0ZjVhNmI3YzhkIiwicXVlc3Rpb25fc2hhMjU2IjoiMTU5ZTFlZDk5NTk0YzZkMzlkMmNlMzRlOGVhYzY5NGE0MGZiMzJiOGM3YTRiNGIxZDFkOGY4MTM4YmU3YzkzMiIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQC54UJoHUxW3F/AzrcxtoX/DWpbFjygxfblbaFkg4rrDQIgHrF9JcPBALTtRmPcNJ1MoqhwKzMWZb2bdBPaP4J2r9M=\",\"v\":1}"
+      },
+      "core": {
+        "b2d34343d8e0e506c6fd53cfc3eb3911": {
+          "question_id": "7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d",
+          "decision": "allow",
+          "key": "critical",
+          "used": false
+        },
+        "017dbe10eb6b62590046c3ba392fcb78": {
+          "question_id": "7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d",
+          "decision": "deny",
+          "key": "normal",
+          "used": false
+        }
+      },
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "denied"
+      }
+    },
+    {
+      "name": "allow-then-a-newer-deny",
+      "tool": "Bash",
+      "input": {
+        "command": "kill -CONT 4242",
+        "description": "resume the paused agent"
+      },
+      "envelopes": {
+        "017dbe10eb6b62590046c3ba392fcb78": "{\"auth\":\"eyJib2R5IjoiZTA1NGQyMzdhNTg0YTk1OTE5NGU5ZTdjNGQ1YjEyMmVjYmM2MTY2Y2I2OTgzNmZjZjczZGM0NTQ1OGI3ZmM3YiIsImRldmljZSI6IjBmOGEyNzY2ZDI2NDY0NDZiOWExNWMwZmVkY2FjZDUzIiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMToxMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IjdrZlBsekxudXJKandCd01KMjFZeCtkbjBlNDJwZXJtcWhFU29KZTUrQWM9Iiwib3AiOiJmcmllbmQuZGVjaWRlIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjEwWiIsInYiOjF9\",\"body\":\"eyJhY3Rpb24iOiJ7XCJpbnB1dFwiOntcImNvbW1hbmRcIjpcImtpbGwgLUNPTlQgNDI0MlwiLFwiZGVzY3JpcHRpb25cIjpcInJlc3VtZSB0aGUgcGF1c2VkIGFnZW50XCJ9LFwidG9vbFwiOlwiQmFzaFwifSIsImRlY2lzaW9uIjoiZGVueSIsImlkIjoiN2QzYzBiOWE4ZTVmNGE2YjFjMmQzZTRmNWE2YjdjOGQiLCJxdWVzdGlvbl9zaGEyNTYiOiIxNTllMWVkOTk1OTRjNmQzOWQyY2UzNGU4ZWFjNjk0YTQwZmIzMmI4YzdhNGI0YjFkMWQ4ZjgxMzhiZTdjOTMyIiwidG8iOiJGcmllbmQifQ==\",\"sig\":\"MEUCIDhit6iCldI8a0etUZ4erPSBYxvuHo26Y4IlETbgfbhtAiEA901En3YtvVyMMsLprCEcxuBYQfh+/E8PHxM7yCdOtFg=\",\"v\":1}",
+        "b2d34343d8e0e506c6fd53cfc3eb3911": "{\"auth\":\"eyJib2R5IjoiMGM2YmI5ODU0ZTVmYjFmZjY4YTA4ZDIyZDdlMTZjMzhmMTNhYzJkMjQ3MDg5ZGFmOGM5ZDE4NDdjMTg4YWFkNCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJjcml0aWNhbCIsIm5vbmNlIjoiQ2E0Wnhpd3FTc00ydlptSktWRzRmaGUwaGp2VGpwRXlXYTM3V1d6Rjg5OD0iLCJvcCI6ImZyaWVuZC5kZWNpZGUiLCJ0cyI6IjIwMjYtMTAtMTlUMTI6MDA6MDBaIiwidiI6MX0=\",\"body\":\"eyJhY3Rpb24iOiJ7XCJpbnB1dFwiOntcImNvbW1hbmRcIjpcImtpbGwgLUNPTlQgNDI0MlwiLFwiZGVzY3JpcHRpb25cIjpcInJlc3VtZSB0aGUgcGF1c2VkIGFnZW50XCJ9LFwidG9vbFwiOlwiQmFzaFwifSIsImRlY2lzaW9uIjoiYWxsb3ciLCJpZCI6IjdkM2MwYjlhOGU1ZjRhNmIxYzJkM2U0ZjVhNmI3YzhkIiwicXVlc3Rpb25fc2hhMjU2IjoiMTU5ZTFlZDk5NTk0YzZkMzlkMmNlMzRlOGVhYzY5NGE0MGZiMzJiOGM3YTRiNGIxZDFkOGY4MTM4YmU3YzkzMiIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQC54UJoHUxW3F/AzrcxtoX/DWpbFjygxfblbaFkg4rrDQIgHrF9JcPBALTtRmPcNJ1MoqhwKzMWZb2bdBPaP4J2r9M=\",\"v\":1}"
+      },
+      "core": {
+        "b2d34343d8e0e506c6fd53cfc3eb3911": {
+          "question_id": "7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d",
+          "decision": "allow",
+          "key": "critical",
+          "used": false
+        },
+        "017dbe10eb6b62590046c3ba392fcb78": {
+          "question_id": "7d3c0b9a8e5f4a6b1c2d3e4f5a6b7c8d",
+          "decision": "deny",
+          "key": "normal",
+          "used": false
+        }
+      },
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "denied"
+      }
+    },
+    {
+      "name": "deny-then-a-newer-allow",
+      "tool": "Bash",
+      "input": {
+        "command": "kill -CONT 4242",
+        "description": "resume the paused agent"
+      },
+      "envelopes": {
+        "017dbe10eb6b62590046c3ba392fcb78": "{\"auth\":\"eyJib2R5IjoiZTA1NGQyMzdhNTg0YTk1OTE5NGU5ZTdjNGQ1YjEyMmVjYmM2MTY2Y2I2OTgzNmZjZjczZGM0NTQ1OGI3ZmM3YiIsImRldmljZSI6IjBmOGEyNzY2ZDI2NDY0NDZiOWExNWMwZmVkY2FjZDUzIiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMDo1MFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IjdrZlBsekxudXJKandCd01KMjFZeCtkbjBlNDJwZXJtcWhFU29KZTUrQWM9Iiwib3AiOiJmcmllbmQuZGVjaWRlIiwidHMiOiIyMDI2LTEwLTE5VDExOjU5OjUwWiIsInYiOjF9\",\"body\":\"eyJhY3Rpb24iOiJ7XCJpbnB1dFwiOntcImNvbW1hbmRcIjpcImtpbGwgLUNPTlQgNDI0MlwiLFwiZGVzY3JpcHRpb25cIjpcInJlc3VtZSB0aGUgcGF1c2VkIGFnZW50XCJ9LFwidG9vbFwiOlwiQmFzaFwifSIsImRlY2lzaW9uIjoiZGVueSIsImlkIjoiN2QzYzBiOWE4ZTVmNGE2YjFjMmQzZTRmNWE2YjdjOGQiLCJxdWVzdGlvbl9zaGEyNTYiOiIxNTllMWVkOTk1OTRjNmQzOWQyY2UzNGU4ZWFjNjk0YTQwZmIzMmI4YzdhNGI0YjFkMWQ4ZjgxMzhiZTdjOTMyIiwidG8iOiJGcmllbmQifQ==\",\"sig\":\"MEUCIQCRQWIhmnQuZY+GU/hDNLL5apkPKIbFczxmqCi9IvKdcgIgPUT/KWXslhIohe0mBYsaMnvG43ltHMvSLlfWmCxgdHU=\",\"v\":1}",
         "b2d34343d8e0e506c6fd53cfc3eb3911": "{\"auth\":\"eyJib2R5IjoiMGM2YmI5ODU0ZTVmYjFmZjY4YTA4ZDIyZDdlMTZjMzhmMTNhYzJkMjQ3MDg5ZGFmOGM5ZDE4NDdjMTg4YWFkNCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJjcml0aWNhbCIsIm5vbmNlIjoiQ2E0Wnhpd3FTc00ydlptSktWRzRmaGUwaGp2VGpwRXlXYTM3V1d6Rjg5OD0iLCJvcCI6ImZyaWVuZC5kZWNpZGUiLCJ0cyI6IjIwMjYtMTAtMTlUMTI6MDA6MDBaIiwidiI6MX0=\",\"body\":\"eyJhY3Rpb24iOiJ7XCJpbnB1dFwiOntcImNvbW1hbmRcIjpcImtpbGwgLUNPTlQgNDI0MlwiLFwiZGVzY3JpcHRpb25cIjpcInJlc3VtZSB0aGUgcGF1c2VkIGFnZW50XCJ9LFwidG9vbFwiOlwiQmFzaFwifSIsImRlY2lzaW9uIjoiYWxsb3ciLCJpZCI6IjdkM2MwYjlhOGU1ZjRhNmIxYzJkM2U0ZjVhNmI3YzhkIiwicXVlc3Rpb25fc2hhMjU2IjoiMTU5ZTFlZDk5NTk0YzZkMzlkMmNlMzRlOGVhYzY5NGE0MGZiMzJiOGM3YTRiNGIxZDFkOGY4MTM4YmU3YzkzMiIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQC54UJoHUxW3F/AzrcxtoX/DWpbFjygxfblbaFkg4rrDQIgHrF9JcPBALTtRmPcNJ1MoqhwKzMWZb2bdBPaP4J2r9M=\",\"v\":1}"
       },
       "core": {

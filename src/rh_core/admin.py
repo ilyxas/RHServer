@@ -60,13 +60,29 @@ class AdminError(RuntimeError):
     pass
 
 
+# One command is one line. The contract allows an action of 65 536 characters and a question
+# of 8000; UTF-8 and JSON escaping can multiply that, so the line limit is far above it.
+LINE_LIMIT = 4 * 1024 * 1024
+
+
 async def serve(core: Core) -> asyncio.AbstractServer:
     path = core.config.admin_socket
     _claim(path)
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            line = await reader.readline()
+            try:
+                line = await reader.readline()
+            except ValueError:  # LimitOverrunError: longer than LINE_LIMIT
+                await _send(
+                    writer,
+                    {
+                        "ok": False,
+                        "error": "bad_request",
+                        "message": f"one command is one line of at most {LINE_LIMIT} bytes",
+                    },
+                )
+                return
             try:
                 msg = json.loads(line)
                 if not isinstance(msg, dict):
@@ -85,7 +101,7 @@ async def serve(core: Core) -> asyncio.AbstractServer:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
 
-    server = await asyncio.start_unix_server(handle, path=str(path))
+    server = await asyncio.start_unix_server(handle, path=str(path), limit=LINE_LIMIT)
     os.chmod(path, 0o600)
     return server
 
@@ -141,6 +157,7 @@ async def _dispatch(
         try:
             question = core.ask(str(msg.get("text") or ""), str(msg.get("action") or ""))
         except ValueError as e:
+            core.journal.append("friend.question.refused", reason=str(e)[:200])
             await _send(writer, {"ok": False, "error": "bad_request", "message": str(e)})
         else:
             await _send(writer, {"ok": True, **question.to_api()})

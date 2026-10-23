@@ -15,7 +15,7 @@ import re
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +58,7 @@ from rh_common.protocol import (
     format_ts,
     frame_sig_message,
     parse_auth,
+    parse_ts,
     server_sig_message,
     verify_pair,
     verify_request,
@@ -218,7 +219,21 @@ class Core:
             question_sha256=question_sha256(text),
             action_sha256=sha256_hex(action.encode("utf-8")),
         )
+        # Asking again about the same action supersedes what was allowed before and not used.
+        self._void_allows(action, now=now, by=f"question:{question.id}", reason="new_question")
         return question
+
+    def _void_allows(
+        self, action: str, *, now: datetime, by: str, reason: str, keep: str | None = None
+    ) -> None:
+        for decision_id in self.store.void_unused_allows(action, now=now, by=by, keep=keep):
+            self.journal.append(
+                "friend.decision.voided",
+                id=decision_id,
+                reason=reason,
+                by=by,
+                action_sha256=sha256_hex(action.encode("utf-8")),
+            )
 
     def withdraw(self, question_id_: str) -> bool:
         ok = self.store.withdraw_question(question_id_, now=self.clock())
@@ -245,14 +260,27 @@ class Core:
     ) -> dict[str, Any]:
         """Spend an allow decision for exactly this action: the first use wins.
 
-        Returns {"ok": True, "decision": ...} or {"ok": False, "error": code, "message"}.
-        Codes: not_found, mismatch, denied, already_used."""
+        The core checks everything itself, whatever the gate checked: the decision exists,
+        names this action and question, says allow with the critical key, is not voided by
+        a later deny or question, is fresh (`[friend] decide_window_s` after both the phone's
+        `ts` and the core's `accepted_at`) and unused. Every refusal is journaled.
+
+        Returns {"ok": True, ...} or {"ok": False, "error": code, "message"}.
+        Codes: not_found, mismatch, wrong_key_level, denied, superseded, expired, already_used."""
+        action_sha = sha256_hex(action.encode("utf-8"))
+
+        def refuse(code: str, message: str) -> dict[str, Any]:
+            self.journal.append(
+                "friend.decision.refused", id=decision_id, reason=code, action_sha256=action_sha
+            )
+            return _refused(code, message)
+
         row = self.store.decision(decision_id)
         if row is None:
-            return _refused("not_found", f"no decision {decision_id}")
+            return refuse("not_found", f"no decision {decision_id}")
         found = self.store.question(row.question_id)
         if found is None:
-            return _refused("mismatch", "the decision's question is gone")
+            return refuse("mismatch", "the decision's question is gone")
         question, _ = found
         if (
             row.action != action
@@ -260,12 +288,28 @@ class Core:
             or row.question_sha256 != question_sha256_
             or question_sha256(question.text) != question_sha256_
         ):
-            return _refused("mismatch", "action or question do not match the decision")
+            return refuse("mismatch", "action or question do not match the decision")
         if row.decision != "allow":
-            return _refused("denied", "the owner denied this action")
-        if not self.store.use_decision(decision_id, now=self.clock()):
-            self.journal.append("friend.decision.refused", id=decision_id, reason="already_used")
-            return _refused("already_used", "this decision was already used")
+            return refuse("denied", "the owner denied this action")
+        if row.key != "critical":
+            return refuse("wrong_key_level", "an allow must be signed with the critical key")
+        if row.voided_at is not None:
+            return refuse(
+                "superseded", f"a later decision or question replaced it ({row.voided_by})"
+            )
+        now = self.clock()
+        window = timedelta(seconds=self.config.decide_window_s)
+        for label, stamp in (("signed", row.signed_at), ("accepted", row.accepted_at)):
+            try:
+                at = parse_ts(stamp)
+            except ValueError:
+                return refuse("expired", f"unreadable {label} time {stamp!r}")
+            if now - at > window:
+                return refuse(
+                    "expired", f"{label} at {stamp}, older than {int(window.total_seconds())} s"
+                )
+        if not self.store.use_decision(decision_id, now=now):
+            return refuse("already_used", "this decision was already used")
         self.journal.append(
             "friend.decision.used",
             id=decision_id,
@@ -582,6 +626,9 @@ async def friend_decide(request: Request) -> Response:
         action_sha256=sha256_hex(decision.action.encode("utf-8")),
         body_sha256=sha256_hex(body),
     )
+    if decision.decision == "deny":
+        # The newest decision counts: a deny voids every unused allow for the same action.
+        core._void_allows(decision.action, now=now, by=f"deny:{sid}", reason="denied")
     return core.signed(
         200,
         {

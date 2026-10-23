@@ -1,5 +1,10 @@
 # contracts/ changelog
 
+## friend.decide, last round before the live test
+
+- `vectors/friend_decide.json` version 2, `gate` section: for one action the newest decision by signed `ts` counts and a deny wins a tie. `deny-and-allow-both-present` (allowed) is replaced by `deny-and-allow-signed-at-the-same-time` (denied), `allow-then-a-newer-deny` (denied) and `deny-then-a-newer-allow` (allowed). Other sections and `friend.json` are byte for byte the same.
+- No changes to `api/openapi.yaml` (0.4.0 stays), signing or WebSocket events.
+
 ## friend.decide (signed decisions for the Friend gate)
 
 - `api/openapi.yaml` 0.4.0:

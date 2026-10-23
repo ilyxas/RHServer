@@ -47,6 +47,7 @@ class Config:
     agent_rules: tuple[Rule, ...] = ()  # agents.status rules; agents without one: unknown
     friend_inbox: Path | None = None  # friend.send envelopes; default data_dir/friend-inbox
     devices_file: Path | None = None  # signed device list; default data_dir/devices.json
+    decide_window_s: int = 120  # an allow decision is spent at most this long after signing
 
     @property
     def db_path(self) -> Path:
@@ -157,10 +158,11 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
 
 
 def _friend(table: Any, base: Path) -> dict[str, Any]:
-    """[friend]: inbox_dir (envelopes for the bridge), devices_file (signed device list)."""
+    """[friend]: inbox_dir (envelopes for the bridge), devices_file (signed device list),
+    decide_window_s (how old an allow decision may be when the gate spends it)."""
     if not isinstance(table, dict):
         raise ConfigError("[friend] must be a table")
-    unknown = set(table) - {"inbox_dir", "devices_file"}
+    unknown = set(table) - {"inbox_dir", "devices_file", "decide_window_s"}
     if unknown:
         raise ConfigError(f"unknown [friend] keys: {sorted(unknown)}")
     out: dict[str, Any] = {}
@@ -168,6 +170,11 @@ def _friend(table: Any, base: Path) -> dict[str, Any]:
         if key in table:
             p = Path(str(table[key])).expanduser()
             out[name] = p if p.is_absolute() else base / p
+    if "decide_window_s" in table:
+        window = table["decide_window_s"]
+        if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+            raise ConfigError("[friend] decide_window_s must be a positive integer (seconds)")
+        out["decide_window_s"] = window
     return out
 
 
@@ -286,6 +293,8 @@ def to_toml(cfg: Config) -> str:
         for key, value in (("inbox_dir", cfg.friend_inbox), ("devices_file", cfg.devices_file))
         if value
     ]
+    if cfg.decide_window_s != 120:
+        friend.append(f"decide_window_s = {cfg.decide_window_s}")
     if friend:
         lines += ["", "[friend]", *friend]
     return "\n".join(lines) + "\n"

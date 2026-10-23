@@ -67,6 +67,13 @@ MIGRATIONS: list[str] = [
         used_at TEXT
     );
     """,
+    # friend slice 2, last round: a deny or a new question about the same action voids the
+    # unused allows for it (the newest decision counts). voided_by: "deny:<id>" or
+    # "question:<id>".
+    """
+    ALTER TABLE friend_decisions ADD COLUMN voided_at TEXT;
+    ALTER TABLE friend_decisions ADD COLUMN voided_by TEXT
+    """,
 ]
 
 
@@ -82,6 +89,8 @@ class DecisionRow:
     signed_at: str
     accepted_at: str
     used_at: str | None
+    voided_at: str | None = None
+    voided_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -331,13 +340,34 @@ class Store:
         return _decision(row) if row else None
 
     def use_decision(self, decision_id: str, *, now: datetime) -> bool:
-        """Spend a decision; False if it was already spent (the first use wins)."""
+        """Spend a decision; False if it was already spent or voided (the first use wins)."""
         with self._tx() as db:
             cur = db.execute(
-                "UPDATE friend_decisions SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                "UPDATE friend_decisions SET used_at = ? WHERE id = ?"
+                " AND used_at IS NULL AND voided_at IS NULL",
                 (format_ts(now), decision_id),
             )
             return cur.rowcount == 1
+
+    def void_unused_allows(
+        self, action: str, *, now: datetime, by: str, keep: str | None = None
+    ) -> list[str]:
+        """Void every unused, unvoided allow for this action (a deny or a new question
+        supersedes them); `keep` is a decision id to leave alone. Returns the ids voided."""
+        with self._tx() as db:
+            rows = db.execute(
+                "SELECT id FROM friend_decisions WHERE action = ? AND decision = 'allow'"
+                " AND used_at IS NULL AND voided_at IS NULL AND id IS NOT ?"
+                " ORDER BY accepted_at, id",
+                (action, keep),
+            ).fetchall()
+            ids = [row["id"] for row in rows]
+            for decision_id in ids:
+                db.execute(
+                    "UPDATE friend_decisions SET voided_at = ?, voided_by = ? WHERE id = ?",
+                    (format_ts(now), by, decision_id),
+                )
+            return ids
 
     def put_decision(self, decision: DecisionRow) -> None:
         """For tests and vector fixtures: a decision row as is (used or not)."""
@@ -377,6 +407,8 @@ def _decision(row: sqlite3.Row) -> DecisionRow:
         signed_at=row["signed_at"],
         accepted_at=row["accepted_at"],
         used_at=row["used_at"],
+        voided_at=row["voided_at"],
+        voided_by=row["voided_by"],
     )
 
 

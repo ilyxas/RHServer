@@ -141,6 +141,10 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
             f"{verb} Friend's action ({name(record.get('device'))})",
             f"question {_short(record.get('question_id'))}, decision {_short(record.get('id'))}",
         )
+    if event == "friend.decision.voided":
+        return f"Friend's allow superseded: {reason}", f"decision {_short(record.get('id'))}"
+    if event == "friend.question.refused":
+        return "Friend's question refused", str(record.get("reason") or "")
     if event == "friend.decision.used":
         return "Friend used a decision", f"decision {_short(record.get('id'))}"
     if event == "friend.decision.refused":

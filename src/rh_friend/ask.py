@@ -2,7 +2,8 @@
 
     rh-friend-ask --config <friend.toml> --question "<why>" --tool Bash \\
                   --input '{"command": "kill -CONT 4242", "description": "resume the agent"}'
-    rh-friend-ask --config <friend.toml> --question "<why>" --bash "kill -CONT 4242"
+    rh-friend-ask --config <friend.toml> --question "<why>" --bash "kill -CONT 4242" \\
+                  --description "resume the agent"
     rh-friend-ask --config <friend.toml> --list
     rh-friend-ask --config <friend.toml> --withdraw <question id>
 
@@ -10,8 +11,13 @@ The question and the exact action go to the core over the admin socket; the phon
 lists them (friend.questions) and answers with a signed friend.decide. The gate then
 lets through exactly the call that was asked about: the same tool with the same
 input, character for character. `--bash` is a shorthand for tool Bash with input
-{"command": "<text>"}; when the call will carry more fields (description, timeout),
-ask with --input and the full object, and run it with the same fields.
+{"command": "<text>", "description": "<text>"}: Claude Code's Bash tool sends a description
+with every command, so one is required here too, exactly as the call will carry it. When
+the call will carry other fields as well (timeout, run_in_background), ask with --input
+and the full object, and run it with the same fields.
+
+A plain call of this program is never a protected action for the gate, whatever the
+question says: asking must not need an answer first.
 """
 
 from __future__ import annotations
@@ -56,7 +62,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--question", help="what the owner should decide, in full")
     parser.add_argument("--tool", help="tool name of the call, e.g. Bash, Edit, Write")
     parser.add_argument("--input", help="the tool input as JSON, exactly as the call will run")
-    parser.add_argument("--bash", help="shorthand: --tool Bash --input '{\"command\": ...}'")
+    parser.add_argument(
+        "--bash", help='shorthand: --tool Bash --input \'{"command": ..., "description": ...}\''
+    )
+    parser.add_argument(
+        "--description",
+        help="with --bash: the description the Bash call will carry (Claude Code always sends one)",
+    )
     parser.add_argument("--list", action="store_true", help="open questions")
     parser.add_argument("--withdraw", metavar="ID", help="withdraw an open question")
     args = parser.parse_args(argv)
@@ -90,8 +102,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.bash is not None:
             if args.tool or args.input:
                 parser.error("--bash cannot be combined with --tool/--input")
-            tool, tool_input = "Bash", {"command": args.bash}
+            if not args.description:
+                parser.error(
+                    "--bash needs --description: Claude Code's Bash tool sends a description "
+                    "with the command, and the gate compares the whole input; give the exact "
+                    "description the call will carry, or use --tool Bash --input with the "
+                    "full object"
+                )
+            tool, tool_input = "Bash", {"command": args.bash, "description": args.description}
         else:
+            if args.description:
+                parser.error("--description goes with --bash")
             if not args.tool or args.input is None:
                 parser.error("--tool and --input (or --bash) are required")
             tool = args.tool
