@@ -16,6 +16,8 @@ dependencies = [
 rhcore = "rh_cli.rhcore:main"
 rhpage = "rh_cli.rhpage:main"
 rh-agent = "rh_agent.__main__:main"
+rh-friend-verify = "rh_friend.verify:main"
+rh-friend-bridge = "rh_friend.bridge:main"
 
 [dependency-groups]
 dev = [
@@ -37,7 +39,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rh_common", "src/rh_core", "src/rh_agent", "src/rh_cli"]
+packages = ["src/rh_common", "src/rh_core", "src/rh_agent", "src/rh_cli", "src/rh_friend"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -62,4 +64,4 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 mypy_path = "src"
-packages = ["rh_common", "rh_core", "rh_agent", "rh_cli"]
+packages = ["rh_common", "rh_core", "rh_agent", "rh_cli", "rh_friend"]

@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import glob
 import json
+import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -26,7 +27,15 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from rh_common import __version__
-from rh_common.crypto import b64e, public_x963, sign_der
+from rh_common.crypto import b64e, public_x963, sha256_hex, sign_der
+from rh_common.friend import (
+    OP_SEND,
+    DeviceEntry,
+    build_devices_doc,
+    envelope_from_headers,
+    parse_body,
+    spool_id,
+)
 from rh_common.protocol import (
     ERROR_STATUS,
     HEADER_AUTH,
@@ -118,6 +127,7 @@ class Core:
             agent_version=lambda: None,  # rh-agent arrives at stage 3
             clock=self.clock,
         )
+        self.export_devices()
 
     def device_name(self, device_id: str) -> str | None:
         row = self.store.device_row(device_id)
@@ -153,9 +163,24 @@ class Core:
 
     # --- device lifecycle ------------------------------------------------------
 
+    def export_devices(self) -> None:
+        """Write the signed device list the Friend verifier reads (on start, pairing, revoke)."""
+        entries = []
+        for row in self.store.devices():
+            device = self.store.device(row.id)
+            if device is not None:
+                entries.append(
+                    DeviceEntry(id=row.id, name=row.name, status=row.status, keys=device.keys)
+                )
+        doc = build_devices_doc(
+            entries, core_key=self.key, core_pub=self.public_key, now=self.clock()
+        )
+        _write_public(self.config.devices_path, doc)
+
     async def revoke(self, device_id: str, *, by: str) -> bool:
         if not self.store.revoke(device_id, now=self.clock()):
             return False
+        self.export_devices()
         self.journal.append("device.revoked", device=device_id, by=by)
         for conn in list(self.connections.get(device_id, ())):
             with contextlib.suppress(Exception):
@@ -336,6 +361,59 @@ async def quick_list(core: Core, verdict: Verdict, body: bytes) -> tuple[int, di
     return 200, {"items": []}  # quick.pin / quick.unpin arrive at stage 5
 
 
+async def friend_send(request: Request) -> Response:
+    """friend.send: verify like any signed operation, then spool the request exactly as
+    received, so the Friend verifier can check the phone's signature itself."""
+    core: Core = request.app.state.core
+    body = await request.body()
+    verdict = _verify(core, request.headers, body, OP_SEND, "normal", request.client, journal=False)
+    if verdict.error is None:
+        try:
+            message = parse_body(body)
+        except ValueError as e:
+            verdict = Verdict(
+                obj=verdict.obj,
+                device=verdict.device,
+                error=ProtocolError("bad_request", str(e)),
+                consume_nonce=False,
+            )
+    _journal_request(core, OP_SEND, verdict, request.client)
+    nonce = verdict.obj.nonce if verdict.obj else ""
+    if verdict.error is not None or verdict.device is None:
+        error = verdict.error or ProtocolError("malformed_auth", "bad friend.send")
+        return core.refuse(error, nonce)
+    sid = spool_id(nonce)
+    envelope = envelope_from_headers(request.headers, body)
+    _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
+    core.journal.append(
+        "chat.friend",
+        device=verdict.device.id,
+        id=sid,
+        message_id=message.id,
+        body_sha256=sha256_hex(body),
+    )
+    return core.signed(
+        200, {"id": sid, "message_id": message.id, "accepted_at": format_ts(core.clock())}, nonce
+    )
+
+
+def _write_public(path: Path, data: bytes) -> None:
+    """Atomic write of a file the Friend session's user reads (mode 644). A directory it
+    creates is 755; an existing one keeps its mode, so the core's own data directory stays
+    700 and production points these paths elsewhere (config [friend])."""
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True)
+        path.parent.chmod(0o755)
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
 # --- unsigned and special endpoints ------------------------------------------------------
 
 
@@ -443,6 +521,7 @@ async def _finish_pair(
         core.store.add_device(
             device_id=req.obj.device, name=req.name, keys=req.keys, now=core.clock(), peer=peer
         )
+        core.export_devices()
         result = "accepted"
         core.journal.append(
             "pairing",
@@ -565,6 +644,7 @@ def create_app(
             methods=["POST"],
         ),
         Route("/v1/quick", signed_endpoint("quick.list", "normal", quick_list), methods=["GET"]),
+        Route("/v1/friend", friend_send, methods=["POST"]),
         WebSocketRoute("/v1/ws", ws_open),
     ]
     app = Starlette(routes=routes, lifespan=lifespan)

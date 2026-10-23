@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import vectors_friend  # noqa: E402
 import vectors_trust  # noqa: E402
 from rh_common.jcs import JCSError, canonicalize_text  # noqa: E402
 
@@ -170,7 +171,7 @@ def render(doc: dict[str, Any]) -> str:
     return json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
 
 
-GENERATED = {"jcs.json": jcs_vectors, **vectors_trust.GENERATED}
+GENERATED = {"jcs.json": jcs_vectors, **vectors_trust.GENERATED, **vectors_friend.GENERATED}
 
 
 def main() -> int:

@@ -1,0 +1,325 @@
+{
+  "description": "friend.send. build: the phone's body is JSON with sorted keys and no spaces, {\"id\",\"text\",\"to\":\"Friend\"}, signed with the normal key at POST /v1/friend. core: requests against signed_requests.json fixture; accept spools the request as received under spool_id = first 32 hex of sha256(nonce). devices: the core's signed device list {\"payload\":\"<JCS>\",\"sig\":\"<core key over payload>\"}. envelopes: what the Friend verifier must pass or block for a pointer ⟦rh:<spool_id>⟧ at `now` with a 900 s window and the listed nonces already seen.",
+  "version": 1,
+  "core_pub_x963_b64": "BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=",
+  "window_s": 900,
+  "build": [
+    {
+      "name": "ascii",
+      "id": "m-1",
+      "text": "check the build",
+      "expected_body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiJjaGVjayB0aGUgYnVpbGQiLCJ0byI6IkZyaWVuZCJ9",
+      "expected_body_text": "{\"id\":\"m-1\",\"text\":\"check the build\",\"to\":\"Friend\"}",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiZGY0ZGQyNmM2OTNjZjM4ZDdkMzVlZDYxNmNiN2Y0MTFiYjE5YmQ3MDY2YzU5NGRhZjU1NjkyYjNmYWEyOGU0MSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEQCIGvWVSS4Qo8sjjXgGA+w1/mRWF3QOxCrH9UNChsPlYMAAiBy2exSUZXH9RA4Mbmo7ylXUILp1Byzttw4as978pOolw=="
+      }
+    },
+    {
+      "name": "unicode",
+      "id": "m-1",
+      "text": "Проверь сборку 🚀",
+      "expected_body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=",
+      "expected_body_text": "{\"id\":\"m-1\",\"text\":\"Проверь сборку 🚀\",\"to\":\"Friend\"}",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78="
+      }
+    }
+  ],
+  "core": [
+    {
+      "name": "send-ok",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=",
+      "expect": {
+        "result": "accept",
+        "spool_id": "b2d34343d8e0e506c6fd53cfc3eb3911"
+      }
+    },
+    {
+      "name": "send-critical-key",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJjcml0aWNhbCIsIm5vbmNlIjoiQ2E0Wnhpd3FTc00ydlptSktWRzRmaGUwaGp2VGpwRXlXYTM3V1d6Rjg5OD0iLCJvcCI6ImZyaWVuZC5zZW5kIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+        "X-RH-Sig": "MEUCIBEA1cKQj1jLk/3NtYnvi1/TKMRlB7NfWUJ0l5G8AVqUAiEApxnFXRFGgHI2kA0mUv7SzTN46ZesHV9RwG82ffzTxOo="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=",
+      "expect": {
+        "result": "reject",
+        "code": "wrong_key_level",
+        "status": 401
+      }
+    },
+    {
+      "name": "send-op-mismatch",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9",
+        "X-RH-Sig": "MEUCIEbtHLhDcCIYobehEohFXR9Hp9B/EM1t0jElyJpkMfIqAiEAzbfmG2073ZudDDpFO1o543uuSYMCNoC+mfY18/KCzU0="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=",
+      "expect": {
+        "result": "reject",
+        "code": "op_mismatch",
+        "status": 401
+      }
+    },
+    {
+      "name": "send-revoked-device",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6Ijk5NGEwZmMyMjdjY2I1NjZlMzU3NGNjMDI2ZjE5NTljIiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6ImxkUVJHNDQyUVVRMkZRell1UUhFS0ZsZGVocmpTYW9wdVJVL0g2M2xKZTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEYCIQDbjg0BFM7I7WaZ4vLQRiSYIAKAJJdZMQ9Hu4JN5XDbdgIhALh8iFEOTx5xrxjk48tdS1CyO/2DcwhABClBRPucthjo"
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=",
+      "expect": {
+        "result": "reject",
+        "code": "revoked_device",
+        "status": 403
+      }
+    },
+    {
+      "name": "send-wrong-recipient",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDBhOWVjYjBhY2I4ZjQ0ODMxZDY3OWYxZTlhN2ExMzQ5ZmQ4ZjgyMTFmZmQxNDQ0YzQ4M2JhNzk2N2IyYmYyMCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCID5Ryp3BkPPIpk67R6C3tVzfOApGqd5D3mXX+DDenDdMAiEA3BFkPBJpwsORgKZja+dcUCoryh6b8XIfVcw9zIyR7wg="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiUmVtb3RlSGFuZHMifQ==",
+      "expect": {
+        "result": "reject",
+        "code": "bad_request",
+        "status": 400
+      }
+    },
+    {
+      "name": "send-empty-text",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiZTgxYjQwOWM1ZmNjYTI2ZjZmY2M1ZDQ5YzRkYjQzODEwMGY1MDYxMGYwZWI2MTI2MTFlZWRiNGIxNWEzOTM4OCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIQDYRLXze0uW+jZKkOVdp6BRrLANK9KVWOJUMDby2e52VAIgcXvgds0I3K+89A1bGysWo+nQ9Gr43zN6u7CoRhrq6j8="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiIgICIsInRvIjoiRnJpZW5kIn0=",
+      "expect": {
+        "result": "reject",
+        "code": "bad_request",
+        "status": 400
+      }
+    },
+    {
+      "name": "send-bad-id",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiYzM4ZjA4YjYxYzYxNTRjYzU0MjRjZTkzNDEyZjM3MmI1NDlhNWFiNTBjNWJkNTM3ZDkyYmYxNWRjODllM2JlYiIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEYCIQDy96Ug7hAeB6gyjbPIyhpRMNbwGUKnEz5iYB/ImodeggIhAL6Pokpc373iCiRt6JeOCo4mTx/Sr7tYnklsDWyoIIn3"
+      },
+      "body_b64": "eyJpZCI6Im5vIHNwYWNlcyIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=",
+      "expect": {
+        "result": "reject",
+        "code": "bad_request",
+        "status": 400
+      }
+    },
+    {
+      "name": "send-extra-field",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiY2I0N2JlMmM1NThkOTZkNTMwNDIyNDA1Njc3NDA4NzMzZDFmZTEwNmRhOGJkYTQ1ODIwMjQyOTg2NzRlMzc0NCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEYCIQDPXETKFYxstLRKLChIh8jiaCaTGSj/j7kZQmlljYq59QIhAMO4Xtb8CsPpTm5j8HZpja2jTz8vsOg8ei+mzWzTMySW"
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiJ4IiwidG8iOiJGcmllbmQiLCJ4IjoxfQ==",
+      "expect": {
+        "result": "reject",
+        "code": "bad_request",
+        "status": 400
+      }
+    },
+    {
+      "name": "send-body-changed",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInRleHQiOiLQtNGA0YPQs9C+0LUiLCJ0byI6IkZyaWVuZCJ9",
+      "expect": {
+        "result": "reject",
+        "code": "body_mismatch",
+        "status": 401
+      }
+    }
+  ],
+  "devices": {
+    "valid": "{\"payload\":\"{\\\"core_key\\\":\\\"BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=\\\",\\\"devices\\\":[{\\\"id\\\":\\\"0f8a2766d2646446b9a15c0fedcacd53\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BDcie1iPLg92ux53haZtNRpovjwzXgF9FoZQbu3pJpkYmUlhXkgPs3CW9LZVwe23XGFCYHKWPl8PP+15QyBlXHo=\\\",\\\"normal\\\":\\\"BCd+hdMlvcfP0qOX4tzz3o/1D0D7DSgBraVGFE0xxuu6aVayPC60rdV5fvFg1/liV55LvMvZf2ki/m9fURsxve4=\\\"},\\\"name\\\":\\\"iPad\\\",\\\"status\\\":\\\"active\\\"},{\\\"id\\\":\\\"994a0fc227ccb566e3574cc026f1959c\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BAGQeNJR8NMButD+kK5bx3Fv7/U0DYQItYb7dNyMcsvOCdinR9+JbYxSpjYQ4mZ3/A/q0X0FpSc/NnItWEftbvU=\\\",\\\"normal\\\":\\\"BAFI50C2NRWThz+FBb1xMzoRWhHASiWGpIIjp4Qzinikz827TpYzDRJXxB9KlGm9s0CGdHHPoCnoqjAxtirjbIM=\\\"},\\\"name\\\":\\\"Old iPhone\\\",\\\"status\\\":\\\"revoked\\\"},{\\\"id\\\":\\\"d75ea68ce8991662334519e0e806a338\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BO8jAF5WnOLccDHbujtWyURtSmZO8mo/IYHrU+aUCBnCCf+i8AGcppdrubaSWviRNJNqiAK9M6oxTuH6bdFL4Kk=\\\",\\\"normal\\\":\\\"BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=\\\"},\\\"name\\\":\\\"Мой iPhone\\\",\\\"status\\\":\\\"active\\\"}],\\\"generated\\\":\\\"2026-10-19T12:00:00Z\\\",\\\"v\\\":1}\",\"sig\":\"MEQCIG23F2FSDPMaZH/OAS4S71lhV0n8lz233SpAc5bI0faXAiAmeOb4BSCE/zTV/5hFTPPrg2gsLpefWi/PUjG9zRkTNQ==\"}",
+    "tampered": "{\"payload\":\"{\\\"core_key\\\":\\\"BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=\\\",\\\"devices\\\":[{\\\"id\\\":\\\"0f8a2766d2646446b9a15c0fedcacd53\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BDcie1iPLg92ux53haZtNRpovjwzXgF9FoZQbu3pJpkYmUlhXkgPs3CW9LZVwe23XGFCYHKWPl8PP+15QyBlXHo=\\\",\\\"normal\\\":\\\"BCd+hdMlvcfP0qOX4tzz3o/1D0D7DSgBraVGFE0xxuu6aVayPC60rdV5fvFg1/liV55LvMvZf2ki/m9fURsxve4=\\\"},\\\"name\\\":\\\"iPad\\\",\\\"status\\\":\\\"active\\\"},{\\\"id\\\":\\\"994a0fc227ccb566e3574cc026f1959c\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BAGQeNJR8NMButD+kK5bx3Fv7/U0DYQItYb7dNyMcsvOCdinR9+JbYxSpjYQ4mZ3/A/q0X0FpSc/NnItWEftbvU=\\\",\\\"normal\\\":\\\"BAFI50C2NRWThz+FBb1xMzoRWhHASiWGpIIjp4Qzinikz827TpYzDRJXxB9KlGm9s0CGdHHPoCnoqjAxtirjbIM=\\\"},\\\"name\\\":\\\"Old iPhone\\\",\\\"status\\\":\\\"revoked\\\"},{\\\"id\\\":\\\"d75ea68ce8991662334519e0e806a338\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BO8jAF5WnOLccDHbujtWyURtSmZO8mo/IYHrU+aUCBnCCf+i8AGcppdrubaSWviRNJNqiAK9M6oxTuH6bdFL4Kk=\\\",\\\"normal\\\":\\\"BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=\\\"},\\\"name\\\":\\\"Чужой iPhone\\\",\\\"status\\\":\\\"active\\\"}],\\\"generated\\\":\\\"2026-10-19T12:00:00Z\\\",\\\"v\\\":1}\",\"sig\":\"MEQCIG23F2FSDPMaZH/OAS4S71lhV0n8lz233SpAc5bI0faXAiAmeOb4BSCE/zTV/5hFTPPrg2gsLpefWi/PUjG9zRkTNQ==\"}",
+    "other_core": "{\"payload\":\"{\\\"core_key\\\":\\\"BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=\\\",\\\"devices\\\":[{\\\"id\\\":\\\"0f8a2766d2646446b9a15c0fedcacd53\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BDcie1iPLg92ux53haZtNRpovjwzXgF9FoZQbu3pJpkYmUlhXkgPs3CW9LZVwe23XGFCYHKWPl8PP+15QyBlXHo=\\\",\\\"normal\\\":\\\"BCd+hdMlvcfP0qOX4tzz3o/1D0D7DSgBraVGFE0xxuu6aVayPC60rdV5fvFg1/liV55LvMvZf2ki/m9fURsxve4=\\\"},\\\"name\\\":\\\"iPad\\\",\\\"status\\\":\\\"active\\\"},{\\\"id\\\":\\\"994a0fc227ccb566e3574cc026f1959c\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BAGQeNJR8NMButD+kK5bx3Fv7/U0DYQItYb7dNyMcsvOCdinR9+JbYxSpjYQ4mZ3/A/q0X0FpSc/NnItWEftbvU=\\\",\\\"normal\\\":\\\"BAFI50C2NRWThz+FBb1xMzoRWhHASiWGpIIjp4Qzinikz827TpYzDRJXxB9KlGm9s0CGdHHPoCnoqjAxtirjbIM=\\\"},\\\"name\\\":\\\"Old iPhone\\\",\\\"status\\\":\\\"revoked\\\"},{\\\"id\\\":\\\"d75ea68ce8991662334519e0e806a338\\\",\\\"keys\\\":{\\\"critical\\\":\\\"BO8jAF5WnOLccDHbujtWyURtSmZO8mo/IYHrU+aUCBnCCf+i8AGcppdrubaSWviRNJNqiAK9M6oxTuH6bdFL4Kk=\\\",\\\"normal\\\":\\\"BPQllmjW8gM+JEyUq3qG/itaXVsvjJMyoCe7oel22giEIwW9HYUjMPFliIJkfglUPyQWUfCHpwo/BKXmAB/fnp8=\\\"},\\\"name\\\":\\\"Мой iPhone\\\",\\\"status\\\":\\\"active\\\"}],\\\"generated\\\":\\\"2026-10-19T12:00:00Z\\\",\\\"v\\\":1}\",\"sig\":\"MEUCICxMH9u3MstaB8NMbaIjRpWuPnxwrJT3pSZTxEI+DglhAiEA4zWYcESiaOD40xxH0pXx3wOJhQb+c4vaJv/rmY7qOuU=\"}"
+  },
+  "envelopes": [
+    {
+      "name": "valid",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "accept",
+        "text": "Проверь сборку 🚀"
+      }
+    },
+    {
+      "name": "tampered-body",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQv9C+0LTQvNC10L3QsCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "body_mismatch"
+      }
+    },
+    {
+      "name": "wrong-op",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJwaW5nIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIEbtHLhDcCIYobehEohFXR9Hp9B/EM1t0jElyJpkMfIqAiEAzbfmG2073ZudDDpFO1o543uuSYMCNoC+mfY18/KCzU0=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "op_mismatch"
+      }
+    },
+    {
+      "name": "wrong-to",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDBhOWVjYjBhY2I4ZjQ0ODMxZDY3OWYxZTlhN2ExMzQ5ZmQ4ZjgyMTFmZmQxNDQ0YzQ4M2JhNzk2N2IyYmYyMCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiUmVtb3RlSGFuZHMifQ==\",\"sig\":\"MEUCID5Ryp3BkPPIpk67R6C3tVzfOApGqd5D3mXX+DDenDdMAiEA3BFkPBJpwsORgKZja+dcUCoryh6b8XIfVcw9zIyR7wg=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "bad_body"
+      }
+    },
+    {
+      "name": "wrong-key-level",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJjcml0aWNhbCIsIm5vbmNlIjoiQ2E0Wnhpd3FTc00ydlptSktWRzRmaGUwaGp2VGpwRXlXYTM3V1d6Rjg5OD0iLCJvcCI6ImZyaWVuZC5zZW5kIiwidHMiOiIyMDI2LTEwLTE5VDEyOjAwOjAwWiIsInYiOjF9\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIBEA1cKQj1jLk/3NtYnvi1/TKMRlB7NfWUJ0l5G8AVqUAiEApxnFXRFGgHI2kA0mUv7SzTN46ZesHV9RwG82ffzTxOo=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "wrong_key_level"
+      }
+    },
+    {
+      "name": "signed-by-other-device",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEQCIFbWCsMn+hu8N8HMdHShkGGefBiHaFZP4lLe3wagVuK+AiA9neTKO18N3xp6PwMiVGHhEsRT2ma5L+i/IJuEtaOkYw==\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "bad_signature"
+      }
+    },
+    {
+      "name": "revoked-device",
+      "pointer": "⟦rh:fb03ddc88694addbed9ef4211986d509⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6Ijk5NGEwZmMyMjdjY2I1NjZlMzU3NGNjMDI2ZjE5NTljIiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6ImxkUVJHNDQyUVVRMkZRell1UUhFS0ZsZGVocmpTYW9wdVJVL0g2M2xKZTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEYCIQDbjg0BFM7I7WaZ4vLQRiSYIAKAJJdZMQ9Hu4JN5XDbdgIhALh8iFEOTx5xrxjk48tdS1CyO/2DcwhABClBRPucthjo\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "revoked_device"
+      }
+    },
+    {
+      "name": "unknown-device",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6IjNiOGZkNzgzMDAyZDg2Njk0MTVjNWRiYzFmNGU1ZDVkIiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIES9M3M8roZqyQRiiI19eRuX9+xCNKKEaAosmQku1QBwAiEA9M5fg9AP2OYkugoQoyQhA4/vPxv4VqJDMjofxynbrSw=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "unknown_device"
+      }
+    },
+    {
+      "name": "replayed-nonce",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [
+        "Ca4ZxiwqSsM2vZmJKVG4fhe0hjvTjpEyWa37WWzF898="
+      ],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "replayed"
+      }
+    },
+    {
+      "name": "expired",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:16:00Z",
+      "expect": {
+        "result": "block",
+        "code": "too_old"
+      }
+    },
+    {
+      "name": "from-future",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T11:55:00Z",
+      "expect": {
+        "result": "block",
+        "code": "from_future"
+      }
+    },
+    {
+      "name": "pointer-mismatch",
+      "pointer": "⟦rh:00000000000000000000000000000000⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "valid",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "pointer_mismatch"
+      }
+    },
+    {
+      "name": "devices-bad-signature",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "tampered",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "devices_untrusted"
+      }
+    },
+    {
+      "name": "devices-other-core",
+      "pointer": "⟦rh:b2d34343d8e0e506c6fd53cfc3eb3911⟧",
+      "envelope": "{\"auth\":\"eyJib2R5IjoiMDNjOTllOWFkZjcyNDAxMTA4MWM5NTlkY2VhNTY2ODBhMjY5MDE2MjY0YmRlZDhkNzg5YmRjMjA0MjA3YzkyOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==\",\"body\":\"eyJpZCI6Im0tMSIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiRnJpZW5kIn0=\",\"sig\":\"MEUCIQCg6pPuijur1qqyGsgyNkR/M90JOFcAle4DGKqjsR2CpAIgaHSOS6qq99tbNMlrk+XE/b66HxIEzoCqp8oGF+VcP78=\",\"v\":1}",
+      "devices": "other_core",
+      "seen_nonces": [],
+      "now": "2026-10-19T12:00:00Z",
+      "expect": {
+        "result": "block",
+        "code": "devices_untrusted"
+      }
+    }
+  ]
+}

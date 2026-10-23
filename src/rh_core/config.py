@@ -45,6 +45,8 @@ class Config:
     team_file: Path | None = TEAM_FILE  # agents.status; None: no team
     team_skip: tuple[str, ...] = ()  # team ids that are not agents (the owner)
     agent_rules: tuple[Rule, ...] = ()  # agents.status rules; agents without one: unknown
+    friend_inbox: Path | None = None  # friend.send envelopes; default data_dir/friend-inbox
+    devices_file: Path | None = None  # signed device list; default data_dir/devices.json
 
     @property
     def db_path(self) -> Path:
@@ -57,6 +59,14 @@ class Config:
     @property
     def admin_socket(self) -> Path:
         return self.data_dir / "admin.sock"
+
+    @property
+    def inbox_dir(self) -> Path:
+        return self.friend_inbox or self.data_dir / "friend-inbox"
+
+    @property
+    def devices_path(self) -> Path:
+        return self.devices_file or self.data_dir / "devices.json"
 
     @property
     def public_url(self) -> str:
@@ -108,6 +118,7 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
         "whois",
         "tailscale",
         "agents",
+        "friend",
     }
     unknown = set(doc) - known
     if unknown:
@@ -141,7 +152,23 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
     if "mac_name" in doc:
         kwargs["mac_name"] = str(doc["mac_name"])
     kwargs.update(_agents(doc.get("agents", {}), base))
+    kwargs.update(_friend(doc.get("friend", {}), base))
     return Config(**kwargs)
+
+
+def _friend(table: Any, base: Path) -> dict[str, Any]:
+    """[friend]: inbox_dir (envelopes for the bridge), devices_file (signed device list)."""
+    if not isinstance(table, dict):
+        raise ConfigError("[friend] must be a table")
+    unknown = set(table) - {"inbox_dir", "devices_file"}
+    if unknown:
+        raise ConfigError(f"unknown [friend] keys: {sorted(unknown)}")
+    out: dict[str, Any] = {}
+    for key, name in (("inbox_dir", "friend_inbox"), ("devices_file", "devices_file")):
+        if key in table:
+            p = Path(str(table[key])).expanduser()
+            out[name] = p if p.is_absolute() else base / p
+    return out
 
 
 def _agents(table: Any, base: Path) -> dict[str, Any]:
@@ -254,4 +281,11 @@ def to_toml(cfg: Config) -> str:
             lines.append(f"{name} = {q(value)}")
     lines += ["", "[agents]", f"team_file = {q(cfg.team_file or '')}"]
     lines.append(f"skip = [{', '.join(q(s) for s in cfg.team_skip)}]")
+    friend = [
+        f"{key} = {q(value)}"
+        for key, value in (("inbox_dir", cfg.friend_inbox), ("devices_file", cfg.devices_file))
+        if value
+    ]
+    if friend:
+        lines += ["", "[friend]", *friend]
     return "\n".join(lines) + "\n"
