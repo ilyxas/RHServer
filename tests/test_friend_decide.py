@@ -941,7 +941,7 @@ def test_log_feed_shows_friend_events(tmp_path: Path) -> None:
     journal.append("friend.question.withdrawn", id="q" * 32)
     entries, _ = logfeed.page(tmp_path, names=lambda d: "Мой iPhone")
     assert [(e["kind"], e["title"]) for e in reversed(entries)] == [
-        ("chat", "Message to Friend from Мой iPhone"),
+        ("system", "Message to Friend from Мой iPhone"),
         ("approval", "Friend asks for a decision"),
         ("approval", "Allowed Friend's action (Мой iPhone)"),
         ("approval", "Friend used a decision"),

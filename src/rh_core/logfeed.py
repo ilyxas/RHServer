@@ -73,8 +73,7 @@ def kind_of(record: dict[str, Any], *, include_reads: bool = False) -> str | Non
         return "approval"
     if event.startswith("chat."):
         return "chat"
-    if event == "friend.message":
-        return "chat"
+    # friend.message stays kind system: the chat filter is the RemoteHands chat (stage 3).
     if event.startswith("friend.question") or event.startswith("friend.decision"):
         return "approval"  # the owner's decisions for Friend, like approvals for the agent
     if result in ("rejected", "error", "failed"):
