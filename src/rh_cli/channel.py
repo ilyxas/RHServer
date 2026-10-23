@@ -33,6 +33,7 @@ from rh_common.friend import check_agent_id
 from rh_core import keys
 from rh_core.agents import parse_team
 from rh_core.config import Channel, Config, ConfigError, channel_from_dict, channel_toml, from_dict
+from rh_friend import config as friend_config
 
 DEFAULT_OWNER_NAMES = "owner|владелец"
 _TABLE_RE = re.compile(r"^\s*\[")
@@ -144,6 +145,21 @@ def _write(path: Path, text: str, mode: int) -> None:
     os.replace(tmp, path)
 
 
+def _seed_bridge_state(state_file: Path, inbox: Path, out: TextIO) -> None:
+    """A new agent's bridge starts with no delivered ids and would type every envelope
+    already in the inbox (each one blocked as wrong_recipient or replayed). Mark them
+    delivered, unless this agent's bridge has a state of its own."""
+    if state_file.exists():
+        return
+    try:
+        ids = sorted(p.stem for p in inbox.iterdir() if p.suffix == ".json")
+    except FileNotFoundError:
+        ids = []
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    _write(state_file, json.dumps({"delivered": ids}), 0o644)
+    print(f"bridge state: {len(ids)} old envelope(s) marked delivered in {state_file}", file=out)
+
+
 Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
 
 
@@ -185,10 +201,26 @@ def channel_set(
     # 1. Checks; nothing is written until they all pass.
     try:
         old_text = req.config_path.read_text(encoding="utf-8")
-        current = from_dict(tomllib.loads(old_text), base=req.config_path.parent)
+        doc = tomllib.loads(old_text)
+        # A config from before [channel] may still have [friend]: its paths and window carry
+        # over into the new [channel], and replace_channel() drops the table.
+        old_friend = doc.pop("friend", None) or {}
+        current = from_dict(doc, base=req.config_path.parent)
         check_agent_id(req.agent)
         project = req.project_dir.expanduser().resolve()
-        base = current.channel or Channel(agent=req.agent, project_dir=project, target=req.target)
+        base = current.channel or channel_from_dict(
+            {
+                "agent": req.agent,
+                "project_dir": str(project),
+                "target": req.target,
+                **{
+                    k: v
+                    for k, v in old_friend.items()
+                    if k in ("inbox_dir", "devices_file", "decide_window_s")
+                },
+            },
+            req.config_path.parent,
+        )
         new_channel = channel_from_dict(
             {
                 k: v
@@ -245,8 +277,11 @@ def channel_set(
             owner_names=req.owner_names or DEFAULT_OWNER_NAMES,
             rules_text=rules,
         )
+        parsed = friend_config.from_dict(tomllib.loads(agent_text), base=req.agent_config.parent)
+        if parsed.agent != req.agent:
+            return fail("the agent-side config does not read back as the new agent")
     except (ValueError, tomllib.TOMLDecodeError) as e:
-        return fail(str(e))
+        return fail(f"agent-side config: {e}")
 
     # 2. Write both configs, each with a backup.
     previous = current.channel.agent if current.channel else None
@@ -256,6 +291,8 @@ def channel_set(
     _write(req.agent_config, agent_text, 0o644)
     for b in backups:
         print(f"backup: {b}", file=out)
+    if parsed.bridge is not None:
+        _seed_bridge_state(parsed.bridge.state_file, new_cfg.inbox_dir, out)
 
     # 3. Restart the core and wait until it reports the new agent.
     uid = os.getuid()

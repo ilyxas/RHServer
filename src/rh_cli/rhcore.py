@@ -160,7 +160,7 @@ def _friend_config(args: argparse.Namespace, out: TextIO) -> int:
 
     cfg = _config(args)
     ch = cfg.ch
-    if args.project is not None and args.project.expanduser().resolve() != ch.project_dir:
+    if args.project is not None and args.project.expanduser().resolve() != ch.project_dir.resolve():
         raise ConfigError(
             f"--project {args.project} is not [channel] project_dir {ch.project_dir}; "
             "switch the agent with `rhcore channel set`"

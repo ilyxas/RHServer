@@ -295,6 +295,46 @@ def test_channel_set_fails_when_the_core_reports_another_agent(
     assert "does not report channel 'Agent-Beta'" in capsys.readouterr().err
 
 
+def test_channel_set_migrates_a_config_from_before_channel(install: dict[str, Path]) -> None:
+    text = install["core"].read_text(encoding="utf-8")
+    old_inbox = install["dir"] / "data" / "friend-inbox"
+    head = text.split("[channel]")[0]
+    install["core"].write_text(
+        head + f'[friend]\ninbox_dir = "{old_inbox}"\ndecide_window_s = 90\n', encoding="utf-8"
+    )
+    code, out, _ = run_set(install, Fake())
+    assert code == 0, out
+    doc = tomllib.loads(install["core"].read_text(encoding="utf-8"))
+    assert "friend" not in doc
+    assert doc["channel"]["inbox_dir"] == str(old_inbox)
+    assert doc["channel"]["decide_window_s"] == 90
+
+
+def test_channel_set_seeds_the_new_bridge_state(install: dict[str, Path]) -> None:
+    inbox = install["dir"] / "data" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    for sid in ("a" * 32, "b" * 32):
+        (inbox / f"{sid}.json").write_text("{}", encoding="utf-8")
+    code, out, _ = run_set(install, Fake())
+    assert code == 0, out
+    state = (install["dir"] / "Beta").resolve() / "state" / "rh_bridge.json"
+    assert json.loads(state.read_text(encoding="utf-8")) == {"delivered": ["a" * 32, "b" * 32]}
+    assert "2 old envelope(s)" in out
+
+
+def test_channel_set_refuses_an_agent_config_that_would_not_parse(
+    install: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The owner's rules are kept as text; a table after them would be duplicated.
+    text = install["agent"].read_text(encoding="utf-8") + "\n[bridge]\ntarget = 'x'\n"
+    install["agent"].write_text(text, encoding="utf-8")
+    before = install["core"].read_text(encoding="utf-8")
+    code, _, _ = run_set(install, Fake())
+    assert code == 2
+    assert "agent-side config" in capsys.readouterr().err
+    assert install["core"].read_text(encoding="utf-8") == before
+
+
 def test_replace_channel_drops_an_old_friend_table() -> None:
     text = 'mode = "dev"\n\n[friend]\ndecide_window_s = 60\n\n[agents]\nskip = ["Owner"]\n'
     new = replace_channel(text, Channel(agent="A", project_dir=Path("/p"), target="a"))

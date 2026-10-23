@@ -780,7 +780,7 @@ components:
         two status calls when the owner switches the agent.
       properties:
         agent: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$"}
-        title: {type: string, minLength: 1, description: Shown in Chat and on question cards}
+        title: {type: string, minLength: 1, description: "Shown in Chat and on question cards; today the same as agent (the team file lists ids)"}
     FriendQuestion:
       type: object
       additionalProperties: false

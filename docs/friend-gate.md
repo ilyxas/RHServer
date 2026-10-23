@@ -90,7 +90,9 @@ A core without `[channel]` does not start; an old `[friend]` table is refused wi
 pointer here. An id missing from the team file is shown as the id itself, with a
 `friend.channel.warning` in the journal; the core still starts (only `channel set` refuses
 such an id). The channel agent gets an `agents.status` rule (process `claude`, cwd =
-`project_dir`) unless `[[agents.rule]]` configures one with its id.
+`project_dir`) unless `[[agents.rule]]` configures one with its id; an agent that is not a
+Claude Code session (Codex, Grok, an app) needs that explicit rule, or it shows as stopped
+while it runs.
 
 The agent-side config (`friend.toml`: verifier, bridge, gate) is derived from it:
 `rhcore friend-config --owner-names '<name>|<Name>'` prints the whole file, `agent`,
@@ -133,9 +135,12 @@ rhcore channel set --agent <id> --project <the agent's folder> --target <tmux se
 1. Checks, nothing written yet: the id's form; the id is in the team file and no other
    member differs from it only in case (the id takes part in paths; the Mac's file system
    ignores case); the project folder exists; the tmux session `--target` exists.
-2. Writes `[channel]` into core.toml (every other line kept, an old `[friend]` dropped) and
-   the agent-side config next to it; each old file is kept as `*.bak-<time>`. The owner's
+2. Writes `[channel]` into core.toml (every other line kept; an old `[friend]` is dropped and
+   its `inbox_dir`, `devices_file`, `decide_window_s` carry over) and the agent-side config
+   next to it, after reading both back; each old file is kept as `*.bak-<time>`. The owner's
    `[[gate.protected]]` rules are kept as written (`--owner-names` writes the defaults instead).
+   The new agent's bridge state is seeded with the envelopes already in the inbox, so its
+   first start does not type the history into the new session.
 3. Restarts the core (`launchctl kickstart -k`) and waits until the running core reports
    `channel.agent` = the new id over the admin socket; otherwise it is an error, not "done".
    On start the core withdraws the previous agent's open questions and voids its unused
@@ -200,6 +205,11 @@ Prerequisites: the core and bridge LaunchAgents, RHServer installed into its ven
    target = "<tmux session>"
    inbox_dir = "<data_dir>/friend-inbox"   # only to keep the slice-1/2 inbox folder
    ```
+
+   The inbox default moved from `<data_dir>/friend-inbox` to `<data_dir>/inbox`. Keep
+   `inbox_dir` pointing at the old folder while the running bridge and its state file use it;
+   if you move to the new default, regenerate the agent-side config and restart the bridge
+   in the same step.
 
 2. Regenerate the agent-side config (keep a copy of the old one):
 
