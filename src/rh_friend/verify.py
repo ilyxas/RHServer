@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import fcntl
 import json
 import os
@@ -56,14 +57,24 @@ from rh_friend.config import MAX_FUTURE_S, FriendConfig
 
 VERIFIED_MARK = "RH ✔"
 UNSIGNED_LABEL = "[unsigned]"
-# Anything that could pass for the verified label once normalized: a check-mark-like
-# sign after "RH", or a bracketed "[RH".
-_LABEL_LIKE = re.compile(r"RH\s*[\u2713\u2714\u2705\u2611\U0001F5F8]|\[\s*RH\b", re.IGNORECASE)
+# Unsigned input may not look like a verified label in any way: no check-mark-like sign
+# anywhere, no bracketed "[RH", no bracketed "a · b · c" label shape. Only the hook's own
+# context carries labels; this only keeps the transcript from misleading.
+_CHECK_SIGNS = "\u2713\u2714\u2705\u2611\u221a\U0001f5f8\U0001f5f9"
+_LABEL_LIKE = re.compile(
+    rf"[{_CHECK_SIGNS}]|\[\s*RH\b|\[[^\]\n]{{0,120}}[·•∙][^\]\n]{{0,120}}[·•∙][^\]\n]{{0,120}}\]",
+    re.IGNORECASE,
+)
+_INVISIBLE = {"\u115f", "\u1160", "\u3164", "\uffa0", "\u2800"}
 
 
 def looks_like_label(text: str) -> bool:
     folded = unicodedata.normalize("NFKC", text)
-    folded = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    folded = "".join(
+        c
+        for c in folded
+        if unicodedata.category(c) not in ("Cf", "Mn", "Me") and c not in _INVISIBLE
+    )
     folded = re.sub(r"\s+", " ", folded)
     return _LABEL_LIKE.search(folded) is not None
 
@@ -223,7 +234,11 @@ def _load_envelope(cfg: FriendConfig, sid: str) -> Envelope:
 
 def _load_devices(cfg: FriendConfig) -> dict[str, DeviceEntry]:
     try:
-        data = cfg.devices_file.read_bytes()
+        data = (
+            read_protected(cfg.devices_file)
+            if cfg.require_protected
+            else cfg.devices_file.read_bytes()
+        )
     except OSError as e:
         raise Reject("devices_untrusted", f"cannot read the device list: {e.strerror}") from e
     try:
@@ -233,22 +248,51 @@ def _load_devices(cfg: FriendConfig) -> dict[str, DeviceEntry]:
 
 
 def _check_protected(cfg: FriendConfig) -> None:
-    """The trust anchors must not be writable by the user the hook runs as."""
-    uid = os.getuid()
-    paths = [cfg.devices_file, cfg.devices_file.parent]
+    """The trust anchors must not be changeable by the user the hook runs as."""
+    check_protected_path(cfg.devices_file)
     if cfg.source is not None:
-        paths += [cfg.source, cfg.source.parent]
-    for path in paths:
-        try:
-            st = os.stat(path)
-        except OSError as e:
-            raise Reject("unprotected", f"cannot stat {path}: {e.strerror}") from e
-        if (
-            st.st_uid == uid
-            or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-            or os.access(path, os.W_OK)
-        ):
+        check_protected_path(cfg.source)
+
+
+def check_protected_path(path: Path) -> None:
+    """Neither the file nor any directory above it (as written and fully resolved) may be
+    owned or writable by this user, so nothing on the way can be renamed or replaced.
+    A world-writable directory passes only with the sticky bit and another owner."""
+    uid = os.getuid()
+    chains = {_chain(Path(os.path.abspath(path))), _chain(Path(os.path.realpath(path)))}
+    for chain in chains:
+        for p in chain:
+            try:
+                st = os.lstat(p)
+            except OSError as e:
+                raise Reject("unprotected", f"cannot stat {p}: {e.strerror}") from e
+            if st.st_uid == uid:
+                raise Reject("unprotected", f"{p} belongs to this user")
+            if stat.S_ISLNK(st.st_mode):
+                continue  # a link owned by someone else; its target is the resolved chain
+            sticky = stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX
+            if not sticky and (st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or os.access(p, os.W_OK)):
+                raise Reject("unprotected", f"{p} can be changed by this user")
+
+
+def _chain(path: Path) -> tuple[Path, ...]:
+    return (path, *path.parents)
+
+
+def read_protected(path: Path) -> bytes:
+    """Read a checked anchor without following a final symlink, from one descriptor."""
+    check_protected_path(path)
+    fd = os.open(os.path.realpath(path), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if st.st_uid == os.getuid() or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise Reject("unprotected", f"{path} can be changed by this user")
+        chunks = []
+        while chunk := os.read(fd, 1 << 16):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
 
 
 def _ts(dt: datetime) -> str:
@@ -269,6 +313,14 @@ def _block(cfg: FriendConfig, sid: str | None, code: str, detail: str) -> dict[s
     }
 
 
+def _unreadable(reason: str) -> dict[str, Any]:
+    return {
+        "decision": "block",
+        "reason": f"RemoteHands: unreadable hook input ({reason})",
+        "hookSpecificOutput": {"hookEventName": "UserPromptSubmit"},
+    }
+
+
 def fallback(prompt: str, reason: str) -> dict[str, Any]:
     """When the hook cannot do its job: never pass a pointer or a label, mark the rest."""
     if POINTER_RE.match(prompt.strip()) or looks_like_label(prompt):
@@ -283,7 +335,23 @@ def fallback(prompt: str, reason: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rh-friend-verify", description=__doc__)
     parser.add_argument("--config", type=Path, default=friend_config.DEFAULT_PATH)
+    parser.add_argument(
+        "--project",
+        type=Path,
+        help="act only in this project; checked before the config is read",
+    )
+    parser.add_argument(
+        "--require-protected",
+        action="store_true",
+        help="managed install: the config and the device list must not be changeable by "
+        "this user (the config cannot turn this off)",
+    )
     args = parser.parse_args(argv)
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if args.project is not None and (
+        not project_dir or os.path.realpath(project_dir) != os.path.realpath(args.project)
+    ):
+        return 0
     raw = sys.stdin.read()
     try:
         event = json.loads(raw)
@@ -291,12 +359,16 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("hook input is not an object")
     except ValueError as e:
         print(f"rh-friend-verify: {e}", file=sys.stderr)
-        print(json.dumps(fallback(raw, "unreadable hook input"), ensure_ascii=False))
+        print(json.dumps(_unreadable(str(e))))
         return 0
     prompt = str(event.get("prompt", ""))
     try:
+        if args.require_protected:
+            check_protected_path(args.config)
         cfg = friend_config.load(args.config)
-        out = handle(event, cfg, project_dir=os.environ.get("CLAUDE_PROJECT_DIR"))
+        if args.require_protected:
+            cfg = dataclasses.replace(cfg, require_protected=True)
+        out = handle(event, cfg, project_dir=project_dir)
     except Exception as e:  # config missing or broken, or a bug: fail closed
         print(f"rh-friend-verify: {type(e).__name__}: {e}", file=sys.stderr)
         out = fallback(prompt, type(e).__name__)
