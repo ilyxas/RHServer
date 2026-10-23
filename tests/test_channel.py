@@ -328,3 +328,59 @@ def test_vectors_name_a_channel_agent_other_than_friend() -> None:
     for name in ("friend.json", "friend_decide.json"):
         doc = json.loads((ROOT / "contracts/vectors" / name).read_text(encoding="utf-8"))
         assert doc["agent"] == "Agent-Alpha"
+
+
+# --- the previous agent after a switch ---------------------------------------------------------
+
+
+def _switched_config(tmp: Path) -> tuple[Path, Path]:
+    """An agent-side config already switched to the new agent's folder, and the folder the
+    previous agent's hooks still name."""
+    vectors = json.loads((ROOT / "contracts/vectors/friend.json").read_text(encoding="utf-8"))
+    old, new = tmp / "Old", tmp / "New"
+    old.mkdir()
+    new.mkdir()
+    path = tmp / "agent.toml"
+    path.write_text(
+        f'agent = "Agent-Beta"\nproject_dir = "{new}"\ninbox_dir = "{tmp}"\n'
+        f'devices_file = "{tmp}/devices.json"\ncore_key = "{vectors["core_pub_x963_b64"]}"\n'
+        f'[gate]\nadmin_socket = "{tmp}/admin.sock"\n',
+        encoding="utf-8",
+    )
+    return path, old
+
+
+def test_previous_agent_cannot_run_a_protected_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import io
+
+    from rh_friend import gate
+
+    config, old = _switched_config(tmp_path)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(old))
+
+    def run(command: str) -> int:
+        event = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(old)}
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
+        return gate.main(["--config", str(config), "--project", str(old)])
+
+    assert run("kill -" + "CONT 4242") == 2
+    assert "project_dir differ" in capsys.readouterr().err
+    assert run("ls") == 0  # unprotected calls are never blocked
+
+
+def test_previous_agent_gets_no_check_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import io
+
+    from rh_friend import verify
+
+    config, old = _switched_config(tmp_path)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(old))
+    prompt = "⟦rh:" + "a" * 32 + "⟧"
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"prompt": prompt})))
+    assert verify.main(["--config", str(config), "--project", str(old)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"] == "block"

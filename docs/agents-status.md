@@ -32,17 +32,27 @@ A rule finds the agent's process by **program name** (process name, executable b
 
 `transcripts` is a glob. For `process = "claude"` with a `cwd` it defaults to Claude Code's own folder `~/.claude/projects/<slug>/*.jsonl`, where the slug is the cwd with every character other than a letter or digit replaced by `-`. So no user name is written into the config.
 
+The team file has no default: `[agents] team_file` names it (an empty string: no team).
+The channel agent (`[channel] agent`, docs/friend-gate.md) gets a rule without being listed
+here: process `claude`, `cwd` = `[channel] project_dir`. A `[[agents.rule]]` with its id
+replaces that rule (for `when_running`, `stale_after_s` or another process).
+
 ## Example (placeholders)
 
 ```toml
 [agents]
-team_file = "~/Friend/CLAUDE.md"
+team_file = "~/Observer/team.md"
 skip = ["Owner"]
 
+[channel]
+agent = "Observer"
+project_dir = "~/Observer"
+target = "observer"
+
 [[agents.rule]]
-id = "Friend"
+id = "Observer"             # the channel agent: this rule replaces the default one
 process = "claude"
-cwd = "~/Friend"
+cwd = "~/Observer"
 when_running = "monitoring"
 stale_after_s = 4200        # no activity for 70 min: idle (no permanent monitoring task)
 
