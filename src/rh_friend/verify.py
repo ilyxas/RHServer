@@ -368,6 +368,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg = friend_config.load(args.config)
         if args.require_protected:
             cfg = dataclasses.replace(cfg, require_protected=True)
+        if args.project is not None and os.path.realpath(cfg.project_dir) != os.path.realpath(
+            args.project
+        ):
+            raise ValueError("--project and the config's project_dir differ")
         out = handle(event, cfg, project_dir=project_dir)
     except Exception as e:  # config missing or broken, or a bug: fail closed
         print(f"rh-friend-verify: {type(e).__name__}: {e}", file=sys.stderr)
