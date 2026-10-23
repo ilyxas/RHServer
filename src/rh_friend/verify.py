@@ -7,8 +7,8 @@
   by the pinned core key. Valid: the text goes to the model with the label
   `[RH ✔ <owner> · <device> · <time>]`. Invalid: the input is blocked and the
   reason appended to the rejected log.
-- Any other input: the label `[unsigned]`. Input that draws a verified label by
-  itself is blocked.
+- Any other input: the label `[unsigned]`. What the input says about itself does
+  not matter: only this hook's own context carries a verdict, and every input gets one.
 - Outside the configured project the hook does nothing.
 - With `require_protected = true` (managed install) a pointer is accepted only when
   the config and the device list, and their directories, cannot be changed by the
@@ -29,10 +29,8 @@ import dataclasses
 import fcntl
 import json
 import os
-import re
 import stat
 import sys
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -57,28 +55,6 @@ from rh_friend.config import MAX_FUTURE_S, FriendConfig
 
 VERIFIED_MARK = "RH ✔"
 UNSIGNED_LABEL = "[unsigned]"
-# Unsigned input may not look like the verified label: "RH" (Cyrillic and Greek
-# lookalikes folded) next to a check-like sign, or a bracket opening with "RH". Ordinary
-# text with a check sign ("Done ✓", "√2") passes. Only the hook's own context carries
-# labels; this keeps the transcript from misleading, it is not the proof.
-_CHECK_SIGNS = "\u2713\u2714\u2705\u2611\u221a\U0001f5f8\U0001f5f9"
-_LABEL_LIKE = re.compile(
-    rf"RH\W{{0,4}}[{_CHECK_SIGNS}]|[\[(〔【〈［（{{<]\s*RH\b",
-    re.IGNORECASE,
-)
-_INVISIBLE = {"\u115f", "\u1160", "\u3164", "\uffa0", "\u2800"}
-_CONFUSABLE = str.maketrans("РрНнΡρΗη", "RrHhRrHh")
-
-
-def looks_like_label(text: str) -> bool:
-    folded = unicodedata.normalize("NFKD", text).translate(_CONFUSABLE)
-    folded = "".join(
-        c
-        for c in folded
-        if unicodedata.category(c) not in ("Cf", "Mn", "Me") and c not in _INVISIBLE
-    )
-    folded = re.sub(r"\s+", " ", folded)
-    return _LABEL_LIKE.search(folded) is not None
 
 
 class Reject(Exception):
@@ -190,8 +166,6 @@ def handle(
     prompt = str(event.get("prompt", ""))
     match = POINTER_RE.match(prompt.strip())
     if match is None:
-        if looks_like_label(prompt):
-            return _block(cfg, None, "forged_label", "the input draws a verification label itself")
         return _context(UNSIGNED_LABEL)
     sid = match.group(1)
     at = now()
@@ -324,8 +298,8 @@ def _unreadable(reason: str) -> dict[str, Any]:
 
 
 def fallback(prompt: str, reason: str) -> dict[str, Any]:
-    """When the hook cannot do its job: never pass a pointer or a label, mark the rest."""
-    if POINTER_RE.match(prompt.strip()) or looks_like_label(prompt):
+    """When the hook cannot do its job: never pass a pointer, mark the rest unsigned."""
+    if POINTER_RE.match(prompt.strip()):
         return {
             "decision": "block",
             "reason": f"RemoteHands: cannot verify ({reason})",
