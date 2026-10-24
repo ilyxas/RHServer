@@ -142,6 +142,7 @@ class Core:
             clock=self.clock,
             questions=self.store.open_questions,
             agent_title=lambda: self.agent_title,
+            texts=self.store.chat_text,
         )
         self.export_devices()
         self.bind_channel()
@@ -376,11 +377,12 @@ class Core:
     # --- the owner's messages and the agent's replies (friend slice 3) -----------------
 
     def record_message(
-        self, *, sid: str, device: str, message: FriendMessage, now: datetime
+        self, *, sid: str, device: str, message: FriendMessage, body: bytes, now: datetime
     ) -> MessageRow:
-        """A new message from the owner: stored with its text, journaled as chat, and every
-        message the agent still owed an answer to is superseded by it (the bridge interrupts
-        the agent, so the previous turn ends without a reply)."""
+        """A new message from the owner: stored with its text, journaled as chat (the hash
+        of the text, not the text: the journal is a chain and cannot forget, the store can),
+        and every message the agent still owed an answer to is superseded by it (the bridge
+        interrupts the agent, so the previous turn ends without a reply)."""
         row = self.store.add_message(
             id=sid,
             message_id=message.id,
@@ -389,6 +391,7 @@ class Core:
             kind=message.kind,
             re=message.re,
             text=message.text,
+            body_sha256=sha256_hex(body),
             now=now,
         )
         self.journal.append(
@@ -399,7 +402,7 @@ class Core:
             id=sid,
             kind=message.kind,
             re=message.re,
-            text=message.text,
+            text_sha256=sha256_hex(message.text.encode("utf-8")),
         )
         for previous in self.store.supersede_open(by=sid, now=now):
             self.journal.append("friend.message.superseded", agent=self.agent, id=previous, by=sid)
@@ -485,7 +488,13 @@ class Core:
         if updated is None:
             return _refused("not_found", f"no message {message_id}")
         self.journal.append(
-            "chat.message", author=self.agent, agent=self.agent, id=message_id, kind=kind, text=text
+            "chat.message",
+            author=self.agent,
+            agent=self.agent,
+            id=message_id,
+            reply_seq=updated.replies[-1].seq,
+            kind=kind,
+            text_sha256=sha256_hex(text.encode("utf-8")),
         )
         self.journal.append(event, agent=self.agent, id=message_id)
         return {"ok": True, **updated.to_api()}
@@ -662,6 +671,7 @@ async def log_list(core: Core, verdict: Verdict, q: logfeed.Query) -> tuple[int,
             before=q.before,
             limit=q.limit,
             include_reads=q.include_reads,
+            texts=core.store.chat_text,
         )
     )
     return 200, {"entries": entries, "next": next_}
@@ -749,24 +759,49 @@ async def friend_send(request: Request) -> Response:
         return core.refuse(error, nonce)
     earlier = core.store.find_message(device=verdict.device.id, message_id=message.id)
     if earlier is not None:
-        # The phone sends the same id again when it lost the first answer: one message,
-        # not two; the answer it missed, not a second envelope.
+        if earlier.body_sha256 == sha256_hex(body):
+            # The phone sends the same message again when it lost the first answer: one
+            # message, not two; the answer it missed, not a second envelope.
+            core.journal.append(
+                "friend.message.retry", agent=core.agent, device=verdict.device.id, id=earlier.id
+            )
+            return core.signed(
+                200,
+                {
+                    "id": earlier.id,
+                    "message_id": earlier.message_id,
+                    "accepted_at": earlier.accepted_at,
+                },
+                nonce,
+            )
+        # The same id with another text is a client bug, never silently the old message.
+        error = ProtocolError(
+            "bad_request", f"message id {message.id} was already used for another message"
+        )
         core.journal.append(
-            "friend.message.retry", agent=core.agent, device=verdict.device.id, id=earlier.id
+            "friend.message.id_reused",
+            agent=core.agent,
+            device=verdict.device.id,
+            id=earlier.id,
+            message_id=message.id,
+            body_sha256=sha256_hex(body),
         )
-        return core.signed(
-            200,
-            {
-                "id": earlier.id,
-                "message_id": earlier.message_id,
-                "accepted_at": earlier.accepted_at,
-            },
-            nonce,
-        )
+        return core.refuse(error, nonce)
     sid = spool_id(nonce)
     now = core.clock()
     envelope = envelope_from_headers(request.headers, body)
-    _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
+    path = core.config.inbox_dir / f"{sid}.json"
+    _write_public(path, envelope.to_json())
+    try:
+        row = core.record_message(
+            sid=sid, device=verdict.device.id, message=message, body=body, now=now
+        )
+    except Exception:
+        # No state for the phone means no message for the agent: take the envelope back
+        # before the bridge delivers it, and answer with the error.
+        with contextlib.suppress(OSError):
+            path.unlink()
+        raise
     core.journal.append(
         "friend.message",
         agent=core.agent,
@@ -776,7 +811,6 @@ async def friend_send(request: Request) -> Response:
         kind=message.kind,
         body_sha256=sha256_hex(body),
     )
-    row = core.record_message(sid=sid, device=verdict.device.id, message=message, now=now)
     return core.signed(
         200, {"id": sid, "message_id": message.id, "accepted_at": row.accepted_at}, nonce
     )

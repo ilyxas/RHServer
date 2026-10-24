@@ -89,6 +89,7 @@ MIGRATIONS: list[str] = [
     # friend slice 3: the owner's messages with their state (what the phone shows under each
     # one) and the agent's replies. `seq` is one counter for both tables: a message takes a
     # new seq on every change, so `friend.messages {since}` returns what changed after it.
+    # The texts live here, where they can be deleted; the journal keeps their hashes.
     """
     CREATE TABLE friend_seq (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -104,6 +105,7 @@ MIGRATIONS: list[str] = [
         kind TEXT NOT NULL CHECK (kind IN ('question', 'task')),
         re TEXT,
         text TEXT NOT NULL,
+        body_sha256 TEXT NOT NULL,
         accepted_at TEXT NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('accepted', 'received', 'waiting', 'answered',
                                              'rejected', 'superseded')),
@@ -165,6 +167,7 @@ class MessageRow:
     text: str
     accepted_at: str
     state: str  # accepted | received | waiting | answered | rejected | superseded
+    body_sha256: str = ""  # of the signed body: a retry must carry the same one
     prompt_id: str | None = None
     received_at: str | None = None
     closed_at: str | None = None
@@ -588,14 +591,16 @@ class Store:
         kind: str,
         re: str | None,
         text: str,
+        body_sha256: str,
         now: datetime,
     ) -> MessageRow:
         with self._tx() as db:
             seq = self._next_seq(db)
             db.execute(
                 "INSERT INTO friend_messages (id, seq, message_id, device, agent, kind, re, text,"
-                " accepted_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted')",
-                (id, seq, message_id, device, agent, kind, re, text, format_ts(now)),
+                " body_sha256, accepted_at, state)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted')",
+                (id, seq, message_id, device, agent, kind, re, text, body_sha256, format_ts(now)),
             )
         found = self.message(id)
         assert found is not None
@@ -714,6 +719,24 @@ class Store:
                 out.append(_message(row, replies))
         return out, len(rows) > limit
 
+    def chat_text(self, record: Mapping[str, Any]) -> str | None:
+        """The text behind a `chat.message` journal record: the owner's message by `id`, or
+        the agent's reply by `reply_seq`. None once it was deleted from the store."""
+        message_id, reply_seq = record.get("id"), record.get("reply_seq")
+        if not isinstance(message_id, str):
+            return None
+        with self._lock:
+            if isinstance(reply_seq, int) and not isinstance(reply_seq, bool):
+                row = self._db.execute(
+                    "SELECT text FROM friend_replies WHERE message_id = ? AND seq = ?",
+                    (message_id, reply_seq),
+                ).fetchone()
+            else:
+                row = self._db.execute(
+                    "SELECT text FROM friend_messages WHERE id = ?", (message_id,)
+                ).fetchone()
+        return str(row["text"]) if row else None
+
     def open_messages(self) -> list[MessageRow]:
         """Messages the agent still owes an answer to, oldest first."""
         with self._lock:
@@ -739,6 +762,7 @@ def _message(row: sqlite3.Row, replies: list[sqlite3.Row]) -> MessageRow:
         text=row["text"],
         accepted_at=row["accepted_at"],
         state=row["state"],
+        body_sha256=row["body_sha256"],
         prompt_id=row["prompt_id"],
         received_at=row["received_at"],
         closed_at=row["closed_at"],

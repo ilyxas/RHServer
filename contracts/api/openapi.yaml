@@ -530,11 +530,14 @@ paths:
         protected actions of the gate need a decision. The kind is signed with the body
         and shown to the agent in the verified label.
 
-        The core keeps every accepted message with its text and state (friend.messages).
-        A new message supersedes every earlier one the agent still owed an answer to: the
-        bridge interrupts the agent, so the previous turn ends without a reply. Sending
-        the same `id` again from the same device (a retry after a lost answer) returns
-        the first message's answer and creates nothing.
+        The core keeps every accepted message with its text and state (friend.messages);
+        the journal keeps the hash of the text, not the text. A new message supersedes
+        every earlier one the agent still owed an answer to: the bridge interrupts the
+        agent, so the previous turn ends without a reply (with the bridge's interrupt
+        turned off the previous turn may still finish; its late reply is refused). Sending
+        the same `id` with the same body again from the same device (a retry after a lost
+        answer) returns the first message's answer and creates nothing; the same `id`
+        with another body is bad_request.
       x-rh-op: friend.send
       x-rh-key: normal
       requestBody:
@@ -588,7 +591,10 @@ paths:
         States, in the order they happen: accepted (the core has it), received (the
         agent-side verifier delivered it to the session), waiting (the agent asked the
         owner a decision since; the reply so far is progress), answered (the agent's
-        final reply is in `replies`). Terminal without an answer: rejected (the
+        final reply is in `replies`). Everything after accepted, and every reply, is
+        what the agent side reported over the core's local socket: a fact from the
+        owner's Mac, not a signed one, so the app shows it as the agent's report, not
+        as verified. Terminal without an answer: rejected (the
         verifier blocked it, `reject_code` says why), superseded (a newer message from
         the owner replaced it, `superseded_by`). A session that stops never moves a
         message by itself: it stays received, and agents.status shows the agent is not
@@ -877,7 +883,10 @@ components:
       type: object
       additionalProperties: false
       required: [id, seq, message_id, device, agent, kind, text, accepted_at, state, replies]
-      description: An owner's message as the phone shows it, with its state and replies
+      description: >-
+        An owner's message as the phone shows it, with its state and replies. The states
+        received, waiting and answered, the reject code and the replies are reported by
+        the agent side (unsigned); accepted and superseded are the core's own.
       properties:
         id: {type: string, pattern: "^[0-9a-f]{32}$", description: spool id, as friend.send answered}
         seq: {type: integer, minimum: 1, description: Changes on every update; the cursor of friend.messages}

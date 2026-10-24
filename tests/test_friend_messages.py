@@ -10,6 +10,7 @@ from typing import Any
 
 from openapi_util import check_response
 from refclient import Phone
+from rh_common.crypto import sha256_hex
 from rh_common.friend import OP_MESSAGES, OP_SEND, action_text
 from rh_core import logfeed
 from rh_core.app import Core, parse_messages_query
@@ -87,6 +88,8 @@ def test_message_is_stored_with_its_text_and_state(env: Any) -> None:
     assert again["messages"] == [] and again["next"] == doc["next"]
     chat = [e for e in events(core) if e["event"] == "chat.message"]
     assert len(chat) == 1 and "re" not in chat[0]  # None fields stay out of the journal
+    # The journal keeps the hash, never the text: it is a chain and cannot forget.
+    assert "text" not in chat[0]
     assert chat[0] == {
         **chat[0],
         "author": "owner",
@@ -94,7 +97,7 @@ def test_message_is_stored_with_its_text_and_state(env: Any) -> None:
         "device": phone.id,
         "id": sent["id"],
         "kind": "question",
-        "text": "Is the RAM full for a reason?",
+        "text_sha256": sha256_hex(b"Is the RAM full for a reason?"),
     }
 
 
@@ -128,8 +131,13 @@ def test_received_then_answered(env: Any) -> None:
     assert [(r["kind"], r["text"]) for r in m["replies"]] == [("final", "12:00")]
     names = [e["event"] for e in events(core)]
     assert names.index("friend.message.received") < names.index("friend.message.answered")
-    chat = [(e["author"], e["text"]) for e in events(core) if e["event"] == "chat.message"]
-    assert chat == [("owner", "what time is it?"), (AGENT, "12:00")]
+    chat = [e for e in events(core) if e["event"] == "chat.message"]
+    assert [e["author"] for e in chat] == ["owner", AGENT]
+    assert all("text" not in e for e in chat)
+    assert chat[1]["text_sha256"] == sha256_hex(b"12:00")
+    assert chat[1]["reply_seq"] == m["replies"][0]["seq"]
+    assert core.store.chat_text(chat[0]) == "what time is it?"
+    assert core.store.chat_text(chat[1]) == "12:00"
     # A closed message takes no more replies.
     got = admin(core, {"cmd": "friend.reply", "in_reply_to": sent["id"], "text": "again"})
     assert got == {"ok": False, "error": "closed", "message": f"message {sent['id']} is answered"}
@@ -217,6 +225,12 @@ def test_retry_with_the_same_id_creates_nothing(env: Any) -> None:
     assert len(messages(client, phone)["messages"]) == 1
     assert len(list(core.config.inbox_dir.glob("*.json"))) == 1
     assert [e["event"] for e in events(core)].count("friend.message.retry") == 1
+    # The same id with another text is a client bug: refused, never the old message.
+    r = signed(client, phone, "POST", "/v1/friend", OP_SEND, "normal", body("other text"))
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
+    assert "already used" in r.json()["error"]["message"]
+    assert len(messages(client, phone)["messages"]) == 1
+    assert [e["event"] for e in events(core)].count("friend.message.id_reused") == 1
     # Another device may use the same id: ids are per device.
     other = Phone(name="Второй iPhone")  # a second name: pairing the same name revokes
     pair(core, client, other)
@@ -297,6 +311,24 @@ def test_admin_commands_validate(env: Any) -> None:
     assert got["error"] == "bad_request"
 
 
+def test_store_failure_takes_the_envelope_back(env: Any, monkeypatch: Any) -> None:
+    core, client, _, _ = env
+    phone = Phone()
+    pair(core, client, phone)
+
+    def broken(**kwargs: Any) -> Any:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(core.store, "add_message", broken)
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        signed(client, phone, "POST", "/v1/friend", OP_SEND, "normal", body("hello"))
+    assert list(core.config.inbox_dir.glob("*.json")) == []  # nothing for the bridge
+    assert messages(client, phone)["messages"] == []
+    assert "friend.message" not in [e["event"] for e in events(core)]
+
+
 def test_log_chat_filter_shows_both_sides_and_journal_verifies(env: Any) -> None:
     core, client, _, _ = env
     phone = Phone()
@@ -304,12 +336,24 @@ def test_log_chat_filter_shows_both_sides_and_journal_verifies(env: Any) -> None
     sent = send(client, phone, body("hello"))
     admin(core, {"cmd": "friend.received", "id": sent["id"]})
     admin(core, {"cmd": "friend.reply", "in_reply_to": sent["id"], "text": "hi there"})
-    entries, _ = logfeed.page(core.config.journal_dir, names=core.device_name, filter="chat")
+    entries, _ = logfeed.page(
+        core.config.journal_dir, names=core.device_name, filter="chat", texts=core.store.chat_text
+    )
     assert [(e["title"], e["detail"]) for e in entries] == [
         (f"{AGENT} → owner", "hi there"),
         (f"owner → {AGENT}", "hello"),
     ]
     assert all(e["kind"] == "chat" for e in entries)
+    # Through the API the texts come from the store too, and so does Home's activity.
+    r = signed(client, phone, "POST", "/v1/log", "log.list", "normal", b'{"filter":"chat"}')
+    assert [e["detail"] for e in r.json()["entries"]] == ["hi there", "hello"]
+    rows = signed(
+        client, phone, "POST", "/v1/data", "data.get", "normal", b'{"ids":["rh.activity"]}'
+    ).json()["values"]["rh.activity"]["value"]
+    assert any(row.get("subtitle") == "hi there" for row in rows)
+    # Without the store (a journal read on its own) the text is named as absent, not shown.
+    entries, _ = logfeed.page(core.config.journal_dir, names=core.device_name, filter="chat")
+    assert all(e["detail"].startswith("(text not in the journal") for e in entries)
     entries, _ = logfeed.page(core.config.journal_dir, names=core.device_name)
     titles = [e["title"] for e in entries]
     assert f"{AGENT} answered" in titles and f"{AGENT} received the message" in titles

@@ -77,9 +77,15 @@ through `POST /v1/friend/messages` (contract 0.6.0): `accepted` (the core has it
 `superseded` (a newer message from the owner) end a message without an answer. A new
 message supersedes every earlier one the agent still owed an answer to. The same `id`
 sent again by the same device returns the first message's answer (a retry, not a
-second message). Texts, both ways, are `chat.message` journal records (Log, filter chat).
+second message; the same `id` with another body is refused). Texts, both ways, are
+`chat.message` entries in the Log (filter chat); the journal record carries the hash of the
+text and the ids, the text itself is in the store, where the owner can delete it later
+without breaking the journal chain (a deleted text shows as such in the Log).
 
-The agent side reports facts over the admin socket; none of them is a permission:
+The agent side reports facts over the admin socket; none of them is a permission, and
+none is signed: any process running as the agent's user can send them. The phone shows
+them as the agent's report (the contract says so), not as verified; what is verified stays
+what it was: the owner's signature on the way in, the core's on the way out.
 
 | Command | Who sends it | Effect |
 |---|---|---|

@@ -40,6 +40,7 @@ class DataSources:
         clock: Callable[[], datetime],
         questions: Callable[[], list[Question]] = list,
         agent_title: Callable[[], str] = lambda: "the agent",
+        texts: logfeed.Texts | None = None,
     ) -> None:
         self.probe = probe
         self.team = team
@@ -50,6 +51,7 @@ class DataSources:
         self.clock = clock
         self.questions = questions
         self.agent_title = agent_title
+        self.texts = texts
         self.builtin: dict[str, Callable[[], Reading]] = {
             "sys.cpu": lambda: ("number", round(self.probe.cpu_percent(), 1), "%"),
             "sys.memory": lambda: ("number", round(self.probe.memory_percent(), 1), "%"),
@@ -89,7 +91,9 @@ class DataSources:
         return "rows", rows, None
 
     def _activity(self) -> Reading:
-        entries, _ = logfeed.page(self.journal_dir, names=self.names, limit=ACTIVITY_ROWS)
+        entries, _ = logfeed.page(
+            self.journal_dir, names=self.names, limit=ACTIVITY_ROWS, texts=self.texts
+        )
         rows = []
         for e in entries:
             row = {"id": e["id"], "title": e["title"], "at": e["ts"]}
