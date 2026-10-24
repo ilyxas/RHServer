@@ -1373,4 +1373,108 @@ def test_admin_socket_friend_commands_validate(env: Any) -> None:
     admin.close()
 
 
+# --- question mode ---------------------------------------------------------------------------
+
+
+def _note(cfg: FriendConfig, kind: str) -> None:
+    from rh_friend.verify import write_current
+
+    write_current(cfg, id="c" * 32, kind=kind, prompt_id="p-1", at=NOW)
+
+
+def test_read_only_bash() -> None:
+    allowed = gate.friend_config.DEFAULT_QUESTION_BASH
+    for ok in (
+        "ps aux | grep -i xcode",
+        "vm_stat; top -l 1 | head -20",
+        "git log --oneline -5 && git status",
+        "df -h /",
+        "uv run pytest -q tests/test_x.py",
+        "launchctl list | grep rh",
+    ):
+        assert gate.read_only_bash(ok, allowed), ok
+    for bad in (
+        "rm -rf /tmp/x",
+        "cat x > y",
+        "ps aux | tee log",
+        "sudo ps",
+        "ls $(cat f)",
+        "echo `date`",
+        "ls; make",
+        "git push",
+        "git commit -m x",
+        "python3 script.py",
+        "",
+        "   ",
+        "find . -name x -exec rm {} \\;",  # exec is a word: never read-only
+    ):
+        assert not gate.read_only_bash(bad, allowed), bad
+
+
+def test_question_mode_routes_work_through_a_decision(env: Any, tmp_path: Path) -> None:
+    core, client, clock, _ = env
+    phone = Phone()
+    pair(core, client, phone)
+    cfg = friend_cfg(core, tmp_path)
+    project = str(cfg.project_dir)
+    _note(cfg, "question")
+    read = {"tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}}
+    ps = {"tool_name": "Bash", "tool_input": {"command": "ps aux | grep X", "description": "d"}}
+    edit = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/tmp/x", "old_string": "a", "new_string": "b"},
+    }
+    make = {"tool_name": "Bash", "tool_input": {"command": "make build", "description": "build"}}
+    # Read-only: free. A plain ask call: free.
+    assert gate.handle(read, cfg, project_dir=project, now=clock).kind == "none"
+    assert gate.handle(ps, cfg, project_dir=project, now=clock).kind == "none"
+    ask_cmd = f"{gate.ask_program(cfg.gate)} --question x --bash y --description z"
+    ask_call = {"tool_name": "Bash", "tool_input": {"command": ask_cmd, "description": "ask"}}
+    assert gate.handle(ask_call, cfg, project_dir=project, now=clock).kind == "none"
+    # Work: protected, with a reason that points at rh-friend-ask.
+    out = gate.handle(edit, cfg, project_dir=project, now=clock)
+    assert (
+        out.blocked
+        and out.code == "no_decision"
+        and out.rule
+        and out.rule.startswith("question mode")
+    )
+    assert "asked a question" in (out.detail or "") and "rh-friend-ask" in (out.detail or "")
+    out = gate.handle(make, cfg, project_dir=project, now=clock)
+    assert out.blocked and out.code == "no_decision"
+    # The owner allows exactly that call: it goes through once, as any protected call.
+    q = core.ask("Build to see the error?", action_text("Bash", make["tool_input"]))
+    r = signed(
+        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "critical", decide_body(q, "allow")
+    )
+    assert r.status_code == 200, r.text
+    out = gate.handle(make, cfg, project_dir=project, now=clock)
+    assert out.kind == "allow", out
+    assert gate.handle(make, cfg, project_dir=project, now=clock).code == "already_used"
+    # The log names the rule.
+    last = json.loads(cfg.gate.log.read_text().splitlines()[-1])  # type: ignore[union-attr]
+    assert last["rule"].startswith("question mode")
+    # A task lifts the mode: the same Edit is nobody's business but the rules.
+    _note(cfg, "task")
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
+    assert gate.handle(make, cfg, project_dir=project, now=clock).kind == "none"
+    # The protected rules still win in task mode.
+    kill = {"tool_name": "Bash", "tool_input": {"command": "kill -CONT 1", "description": "d"}}
+    assert gate.handle(kill, cfg, project_dir=project, now=clock).rule == "kill"
+    # No note, or a closed one: no mode.
+    cfg.current_file.unlink()
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
+    cfg.current_file.write_text("not json")
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
+
+
+def test_the_note_itself_is_protected(tmp_path: Path) -> None:
+    rules = default_rules()
+    for path in ("/Users/owner/Alpha/state/rh_current.json", "state/rh_pending.jsonl"):
+        edit = {"file_path": path, "old_string": "a", "new_string": "b"}
+        assert gate.protected_by(rules, "Write", edit, cwd="/Users/owner/Alpha")
+        shell = {"command": f"echo x > {path}", "description": "d"}
+        assert gate.protected_by(rules, "Bash", shell, cwd="/Users/owner/Alpha")
+
+
 _ = Callable  # typing import kept for readers of the fixtures above

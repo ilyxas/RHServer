@@ -40,8 +40,8 @@ import contextlib
 import dataclasses
 import json
 import os
+import re
 import shlex
-import socket
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -53,17 +53,20 @@ from rh_common.crypto import sha256_hex
 from rh_common.friend import OP_DECIDE, Envelope, action_text, parse_envelope
 from rh_common.protocol import ProtocolError, parse_auth, parse_ts
 from rh_friend import config as friend_config
+from rh_friend import core_socket
 from rh_friend.config import FriendConfig, GateConfig, ProtectedRule, default_rules
+from rh_friend.core_socket import SOCKET_TIMEOUT_S, CoreUnreachable
 from rh_friend.verify import (
     VERIFIED_MARK,
     Reject,
     Verified,
     check_envelope,
     check_protected_path,
+    read_current,
     read_protected,
 )
 
-SOCKET_TIMEOUT_S = 5.0
+QUESTION_RULE = "question mode"
 ASK_PROGRAM = "rh-friend-ask"
 # tool_input keys that name a file; resolved against cwd before the rules look at them.
 PATH_FIELDS = ("file_path", "notebook_path", "path")
@@ -72,10 +75,6 @@ PATH_FIELDS = ("file_path", "notebook_path", "path")
 # {"ok": True, ...} or {"ok": False, "error": <code>, "message": ...}. Raises
 # CoreUnreachable when the core does not answer.
 Spend = Callable[[str, str, str], dict[str, Any]]
-
-
-class CoreUnreachable(Exception):
-    pass
 
 
 @dataclass(frozen=True)
@@ -171,12 +170,70 @@ def rule_for(
     cfg: FriendConfig | None, tool_name: str, tool_input: Any, cwd: str | None
 ) -> str | None:
     """The protected rule this call matches, or None. Without a usable config the default
-    rules decide, so a broken config still tells protected calls from the rest."""
+    rules decide, so a broken config still tells protected calls from the rest. With a
+    config, question mode (the owner's current message is a question) protects every call
+    that is not read-only, after the rules."""
     gate = cfg.gate if cfg is not None else None
     if is_ask_call(tool_name, tool_input, ask_program(gate)):
         return None
     rules = gate.protected if gate is not None else default_rules()
-    return protected_by(rules, tool_name, tool_input, cwd=cwd)
+    rule = protected_by(rules, tool_name, tool_input, cwd=cwd)
+    if rule is None and cfg is not None:
+        rule = question_rule(cfg, tool_name, tool_input)
+    return rule
+
+
+# --- question mode ------------------------------------------------------------------------
+
+_SPLIT_RE = re.compile(r"\|\||&&|[|;\n]")
+_REDIRECT_RE = re.compile(r"(^|[^<>])[<>]|&>|\$\(|`")
+
+
+def read_only_bash(command: str, allowed: tuple[str, ...]) -> bool:
+    """True when every segment of the command (split at |, ||, &&, ; and newlines) starts
+    with one of the allowed spellings (first word, or first words such as "git log") and
+    nothing redirects, substitutes or escalates (no < > &> `backticks` $( ), no sudo, tee,
+    xargs, env or eval as a word). The list is a convenience for the owner's questions,
+    not a sandbox: the protected rules still apply first, and a task lifts the mode."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    if _REDIRECT_RE.search(command):
+        return False
+    for segment in _SPLIT_RE.split(command):
+        words = segment.strip().split()
+        if not words:
+            continue
+        if any(w in _NEVER_READ_ONLY or _runs_something(w) for w in words):
+            return False
+        head = " ".join(words[:3])
+        if not any(head == a or head.startswith(a + " ") for a in allowed):
+            return False
+    return True
+
+
+_NEVER_READ_ONLY = frozenset({"sudo", "tee", "xargs", "env", "eval", "exec", "nohup", "source"})
+_DASHED_RUNNERS = frozenset({"exec", "execdir", "ok", "okdir", "delete"})  # find's actions
+
+
+def _runs_something(word: str) -> bool:
+    return word.startswith("-") and word.lstrip("-") in _DASHED_RUNNERS
+
+
+def question_rule(cfg: FriendConfig, tool_name: str, tool_input: Any) -> str | None:
+    """In question mode, the synthetic rule a non-read-only call falls under, else None.
+    No note, a closed one or an unreadable one means no mode (the rules alone)."""
+    current = read_current(cfg)
+    if current is None or current.get("kind") != "question":
+        return None
+    gate = cfg.gate
+    tools = gate.question_tools if gate is not None else friend_config.DEFAULT_QUESTION_TOOLS
+    if tool_name in tools:
+        return None
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        spellings = gate.question_bash if gate is not None else friend_config.DEFAULT_QUESTION_BASH
+        if read_only_bash(str(tool_input.get("command", "")), spellings):
+            return None
+    return f"{QUESTION_RULE} ⟦rh:{current['id']}⟧"
 
 
 # --- decisions in the inbox -----------------------------------------------------------------
@@ -320,13 +377,14 @@ def decide(
         cfg.inbox_dir, action=action, devices=devices, now=now, window=window, agent=cfg.agent
     )
     if not found:
-        return Outcome(
-            "block",
-            code="no_decision",
-            detail=f"no decision for this {tool_name} call",
-            rule=rule,
-            action=action,
-        )
+        detail = f"no decision for this {tool_name} call"
+        if rule.startswith(QUESTION_RULE):
+            detail = (
+                f"the owner asked a question ({rule[len(QUESTION_RULE) + 1 :]}), not for work: "
+                f"answer in text, or ask with rh-friend-ask for exactly this {tool_name} call, "
+                "or tell the owner it needs a task"
+            )
+        return Outcome("block", code="no_decision", detail=detail, rule=rule, action=action)
     latest = found[0]
     if latest.code is not None or latest.verified is None or latest.verified.decision is None:
         return Outcome(
@@ -370,37 +428,16 @@ def _load_devices(cfg: FriendConfig) -> Any:
 
 def spend_over_socket(gate: GateConfig) -> Spend:
     def spend(decision_id: str, action: str, question_sha256: str) -> dict[str, Any]:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(SOCKET_TIMEOUT_S)
-        try:
-            s.connect(str(gate.admin_socket))
-            f = s.makefile("rw", encoding="utf-8", newline="\n")
-            f.write(
-                json.dumps(
-                    {
-                        "cmd": "friend.decision.use",
-                        "id": decision_id,
-                        "action": action,
-                        "question_sha256": question_sha256,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-            f.flush()
-            line = f.readline()
-        except OSError as e:
-            raise CoreUnreachable(f"{gate.admin_socket}: {e}") from e
-        finally:
-            s.close()
-        if not line:
-            raise CoreUnreachable("the core closed the admin socket without an answer")
-        try:
-            answer = json.loads(line)
-        except ValueError as e:
-            raise CoreUnreachable(f"unreadable answer from the core: {e}") from e
-        if not isinstance(answer, dict):
-            raise CoreUnreachable("unreadable answer from the core")
+        answer: dict[str, Any] = core_socket.call(
+            gate.admin_socket,
+            {
+                "cmd": "friend.decision.use",
+                "id": decision_id,
+                "action": action,
+                "question_sha256": question_sha256,
+            },
+            timeout=SOCKET_TIMEOUT_S,
+        )
         return answer
 
     return spend
