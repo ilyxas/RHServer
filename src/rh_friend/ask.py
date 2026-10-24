@@ -30,15 +30,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
 import sys
 from pathlib import Path
 from typing import Any
 
 from rh_common.friend import action_text, question_sha256
 from rh_friend import config as friend_config
+from rh_friend import core_socket
 from rh_friend.config import GateConfig
-from rh_friend.gate import SOCKET_TIMEOUT_S, CoreUnreachable
+from rh_friend.core_socket import SOCKET_TIMEOUT_S, CoreUnreachable
 
 # Fields Claude Code adds to a tool's input before PreToolUse, with the value it adds.
 # Only what was seen in a real hook input goes here.
@@ -56,23 +56,7 @@ def with_defaults(tool: str, tool_input: Any) -> Any:
 
 
 def call(gate: GateConfig, msg: dict[str, Any]) -> dict[str, Any]:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(SOCKET_TIMEOUT_S)
-    try:
-        s.connect(str(gate.admin_socket))
-        f = s.makefile("rw", encoding="utf-8", newline="\n")
-        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-        f.flush()
-        line = f.readline()
-    except OSError as e:
-        raise CoreUnreachable(f"rh-core is not running ({gate.admin_socket}: {e})") from e
-    finally:
-        s.close()
-    if not line:
-        raise CoreUnreachable("the core closed the admin socket without an answer")
-    answer = json.loads(line)
-    if not isinstance(answer, dict):
-        raise CoreUnreachable("unreadable answer from the core")
+    answer: dict[str, Any] = core_socket.call(gate.admin_socket, msg, timeout=SOCKET_TIMEOUT_S)
     return answer
 
 

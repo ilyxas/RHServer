@@ -13,6 +13,11 @@
 - Any other input: the label `[unsigned]`. What the input says about itself does
   not matter: only this hook's own context carries a verdict, and every input gets one.
 - Outside the configured project the hook does nothing.
+- A verified friend.send also leaves a note of the message the session is now on
+  (`state/rh_current.json`: id, kind, prompt_id) for the gate (question or task mode) and
+  the Stop hook (which message the reply answers), and tells the core the message was
+  received (`friend.received`) or, when blocked, rejected (`friend.rejected`). Those
+  reports are best-effort facts: a core that does not answer changes no verdict.
 - With `require_protected = true` (managed install) a pointer is accepted only when
   the config and the device list, and their directories, cannot be changed by the
   user the hook runs as: they hold the trust anchors (pinned core key, devices).
@@ -58,7 +63,10 @@ from rh_common.friend import (
 )
 from rh_common.protocol import ProtocolError, SignedObject, body_hash, parse_auth, parse_ts
 from rh_friend import config as friend_config
+from rh_friend import core_socket
 from rh_friend.config import MAX_FUTURE_S, FriendConfig
+
+Report = Callable[[dict[str, Any]], Any]
 
 VERIFIED_MARK = "RH ✔"
 UNSIGNED_LABEL = "[unsigned]"
@@ -208,13 +216,23 @@ def handle(
     *,
     project_dir: str | None,
     now: Callable[[], datetime] = _now,
+    report: Report | None = None,
 ) -> dict[str, Any] | None:
-    """Hook output for one input, or None to do nothing (another project)."""
+    """Hook output for one input, or None to do nothing (another project).
+
+    `report` sends a fact to the core (default: over the admin socket, best-effort)."""
     if not project_dir or os.path.realpath(project_dir) != os.path.realpath(cfg.project_dir):
         return None
+    if report is None:
+        report = _reporter(cfg)
     prompt = str(event.get("prompt", ""))
     match = POINTER_RE.match(prompt.strip())
+    settle_pending(cfg)  # a reply the Stop hook could not deliver
     if match is None:
+        # The owner (or whoever holds the keyboard) typed into the session: a question from
+        # the phone no longer shapes what the session may do. The message stays open, so
+        # the Stop hook still answers it; only the mode is lifted.
+        lift_question_mode(cfg)
         return _context(UNSIGNED_LABEL)
     sid = match.group(1)
     at = now()
@@ -238,9 +256,9 @@ def handle(
             ledger.write(json.dumps({"nonce": verified.obj.nonce, "id": sid, "at": _ts(at)}) + "\n")
             ledger.flush()
     except Reject as e:
-        return _block(cfg, sid, e.code, e.detail)
+        return _block(cfg, sid, e.code, e.detail, report=report)
     except Exception as e:  # fail closed on anything unexpected
-        return _block(cfg, sid, "error", f"{type(e).__name__}: {e}")
+        return _block(cfg, sid, "error", f"{type(e).__name__}: {e}", report=report)
     signed_at = parse_ts(verified.obj.ts).astimezone().strftime("%H:%M:%S")
     label = f"[{VERIFIED_MARK} {cfg.owner_label} · {verified.device.name} · {signed_at}]"
     if verified.decision is not None:
@@ -250,7 +268,99 @@ def handle(
             f"{label}\n{d.decision} · question {d.id[:8]} · {pointer_of(sid)}\n{d.action}"
         )
     assert verified.message is not None
-    return _context(f"{label}\n{verified.message.text}")
+    message = verified.message
+    prompt_id = event.get("prompt_id") if isinstance(event.get("prompt_id"), str) else None
+    try:  # the note is for the gate and the Stop hook; its loss must not block the message
+        write_current(cfg, id=sid, kind=message.kind, prompt_id=prompt_id, at=at)
+    except Exception as e:
+        print(f"rh-friend-verify: cannot write {cfg.current_file}: {e}", file=sys.stderr)
+        with contextlib.suppress(OSError):
+            _append(
+                cfg.rejected_log,
+                {"at": _ts(at), "id": sid, "code": "note_not_written", "detail": str(e)},
+            )
+    with contextlib.suppress(Exception):
+        report({"cmd": "friend.received", "id": sid, "prompt_id": prompt_id, "kind": message.kind})
+    label = label[:-1] + f" · {message.kind}]"
+    hint = QUESTION_HINT if message.kind == "question" else TASK_HINT
+    return _context(f"{label}\n{hint}\n{message.text}")
+
+
+QUESTION_HINT = (
+    "(a question: answer in text; read-only tools run freely, anything else goes through "
+    "rh-friend-ask or becomes a task when the owner says so)"
+)
+TASK_HINT = "(a task: work on it; protected actions still need a decision)"
+
+
+def _reporter(cfg: FriendConfig) -> Report:
+    return lambda msg: core_socket.report(cfg, msg)
+
+
+# --- the note of the current message -----------------------------------------------------
+
+
+def write_current(
+    cfg: FriendConfig, *, id: str, kind: str, prompt_id: str | None, at: datetime
+) -> None:
+    """Note the owner's message the session is now on, atomically."""
+    _write_note(cfg, {"open": {"id": id, "kind": kind, "prompt_id": prompt_id, "at": _ts(at)}})
+
+
+def read_current(cfg: FriendConfig) -> dict[str, Any] | None:
+    """The open message {id, kind, prompt_id, at}, or None (no note, closed, unreadable)."""
+    try:
+        doc = json.loads(cfg.current_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    open_ = doc.get("open")
+    if not isinstance(open_, dict) or not isinstance(open_.get("id"), str):
+        return None
+    return open_
+
+
+def lift_question_mode(cfg: FriendConfig) -> None:
+    """Keep the open message, drop its question mode (the owner is at the keyboard)."""
+    current = read_current(cfg)
+    if current is None or current.get("kind") != "question":
+        return
+    with contextlib.suppress(Exception):
+        _write_note(cfg, {"open": {**current, "kind": "task", "lifted_at": _ts(_now())}})
+
+
+def settle_pending(cfg: FriendConfig) -> None:
+    """Send deferred reports; a reply the core now answers settles the note."""
+    try:
+        for msg, answer in core_socket.flush_pending(cfg):
+            apply_reply_answer(cfg, msg, answer)
+    except Exception as e:  # never a reason to block a prompt
+        print(f"rh-friend-verify: pending reports: {e}", file=sys.stderr)
+
+
+def apply_reply_answer(cfg: FriendConfig, msg: dict[str, Any], answer: dict[str, Any]) -> None:
+    """What the core said to a friend.reply: answered or closed forgets the open note."""
+    if msg.get("cmd") != "friend.reply" or not isinstance(msg.get("in_reply_to"), str):
+        return
+    if (answer.get("ok") and answer.get("state") == "answered") or answer.get("error") == "closed":
+        close_current(cfg, str(msg["in_reply_to"]))
+
+
+def _write_note(cfg: FriendConfig, doc: dict[str, Any]) -> None:
+    path = cfg.current_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def close_current(cfg: FriendConfig, message_id: str) -> None:
+    """Forget the open message if it is this one (answered or closed by the core)."""
+    current = read_current(cfg)
+    if current is None or current.get("id") != message_id:
+        return
+    _write_note(cfg, {"open": None})
 
 
 def pointer_of(sid: str) -> str:
@@ -340,9 +450,14 @@ def _context(text: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}
 
 
-def _block(cfg: FriendConfig, sid: str | None, code: str, detail: str) -> dict[str, Any]:
+def _block(
+    cfg: FriendConfig, sid: str | None, code: str, detail: str, *, report: Report | None = None
+) -> dict[str, Any]:
     with contextlib.suppress(OSError):
         _append(cfg.rejected_log, {"at": _ts(_now()), "id": sid, "code": code, "detail": detail})
+    if sid is not None and report is not None:
+        with contextlib.suppress(Exception):
+            report({"cmd": "friend.rejected", "id": sid, "code": code, "detail": detail})
     return {
         "decision": "block",
         "reason": f"RemoteHands: message rejected ({code}): {detail}",

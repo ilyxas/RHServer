@@ -315,16 +315,27 @@ def test_bridge_types_each_pointer_once(tmp_path: Path) -> None:
     def run(cmd: Sequence[str]) -> None:
         calls.append(list(cmd))
 
-    assert bridge.step(inbox, cfg, run) == [a]
+    slept: list[float] = []
+    assert bridge.step(inbox, cfg, run, slept.append) == [a]
+    # One Escape first: the owner's message interrupts a working agent; then the line.
     assert calls == [
+        ["tmux", "send-keys", "-t", "friend", "Escape"],
         ["tmux", "send-keys", "-t", "friend", "-l", pointer(a)],
         ["tmux", "send-keys", "-t", "friend", "Enter"],
     ]
+    assert slept == [bridge.ESCAPE_PAUSE_S]
     (inbox / f"{b}.json").write_text("{}")
     calls.clear()
-    assert bridge.step(inbox, cfg, run) == [b]
-    assert bridge.step(inbox, cfg, run) == []
-    assert len(calls) == 2
+    assert bridge.step(inbox, cfg, run, slept.append) == [b]
+    assert bridge.step(inbox, cfg, run, slept.append) == []
+    assert len(calls) == 3
+    # With interrupt off (the owner's choice), only the line and Enter.
+    quiet = BridgeConfig(
+        tmux="tmux", target="friend", state_file=tmp_path / "s2.json", interrupt=False
+    )
+    calls.clear()
+    bridge.type_pointer(quiet, a, run, slept.append)
+    assert [c[4] for c in calls] == ["-l", "Enter"]
 
 
 def test_bridge_retries_after_a_tmux_failure(tmp_path: Path) -> None:
@@ -337,8 +348,8 @@ def test_bridge_retries_after_a_tmux_failure(tmp_path: Path) -> None:
         raise OSError("no tmux")
 
     with pytest.raises(OSError):
-        bridge.step(inbox, cfg, broken)
-    assert bridge.step(inbox, cfg, lambda cmd: None) == ["c" * 32]
+        bridge.step(inbox, cfg, broken, lambda s: None)
+    assert bridge.step(inbox, cfg, lambda cmd: None, lambda s: None) == ["c" * 32]
 
 
 def test_signed_time_is_shown_in_local_time(tmp_path: Path) -> None:
@@ -349,7 +360,73 @@ def test_signed_time_is_shown_in_local_time(tmp_path: Path) -> None:
     out = handle({"prompt": v["pointer"]}, cfg, project_dir=str(cfg.project_dir), now=lambda: now)
     assert out is not None
     signed = NOW.astimezone().strftime("%H:%M:%S")
-    assert f"· {signed}]" in out["hookSpecificOutput"]["additionalContext"]
+    assert f"· {signed} · question]" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_verified_message_leaves_a_note_and_a_receipt(tmp_path: Path) -> None:
+    v = _valid()
+    cfg = friend_config(tmp_path, FRIEND["devices"]["valid"])
+    sid = put(cfg, v)
+    now = parse_ts(v["now"])
+    reports: list[dict[str, Any]] = []
+    out = handle(
+        {"prompt": v["pointer"], "prompt_id": "p-1"},
+        cfg,
+        project_dir=str(cfg.project_dir),
+        now=lambda: now,
+        report=lambda m: reports.append(m) or {"ok": True},
+    )
+    assert out is not None and "decision" not in out
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ctx.splitlines()[0].endswith(" · question]") and ctx.splitlines()[1].startswith(
+        "(a question"
+    )
+    assert ctx.endswith("\n" + v["expect"]["text"])
+    assert reports == [
+        {"cmd": "friend.received", "id": sid, "prompt_id": "p-1", "kind": "question"}
+    ]
+    note = json.loads(cfg.current_file.read_text(encoding="utf-8"))["open"]
+    assert note["id"] == sid and note["kind"] == "question" and note["prompt_id"] == "p-1"
+    assert cfg.current_file == cfg.project_dir / "state" / "rh_current.json"
+    # A blocked pointer reports the rejection; the note stays as it was.
+    reports.clear()
+    again = handle(
+        {"prompt": v["pointer"]},
+        cfg,
+        project_dir=str(cfg.project_dir),
+        now=lambda: now,
+        report=lambda m: reports.append(m) or {"ok": True},
+    )
+    assert again is not None and again["decision"] == "block"
+    assert reports == [{**reports[0], "cmd": "friend.rejected", "id": sid, "code": "replayed"}]
+    assert json.loads(cfg.current_file.read_text(encoding="utf-8"))["open"]["id"] == sid
+
+
+def test_receipt_failure_changes_no_verdict(tmp_path: Path) -> None:
+    v = _valid()
+    cfg = friend_config(tmp_path, FRIEND["devices"]["valid"])
+    put(cfg, v)
+    now = parse_ts(v["now"])
+
+    def broken(msg: dict[str, Any]) -> None:
+        raise OSError("no socket")
+
+    out = handle(
+        {"prompt": v["pointer"]},
+        cfg,
+        project_dir=str(cfg.project_dir),
+        now=lambda: now,
+        report=broken,
+    )
+    assert out is not None and "decision" not in out
+    # Without a [gate] table there is no admin socket: the default reporter does nothing.
+    (tmp_path / "two").mkdir()
+    cfg2 = friend_config(tmp_path / "two", FRIEND["devices"]["valid"])
+    put(cfg2, v)
+    out2 = handle(
+        {"prompt": v["pointer"]}, cfg2, project_dir=str(cfg2.project_dir), now=lambda: now
+    )
+    assert out2 is not None and "decision" not in out2
 
 
 def test_rhcore_friend_config_pins_the_core_key(short_dir: Path, tmp_path: Path) -> None:
