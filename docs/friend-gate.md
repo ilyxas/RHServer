@@ -68,6 +68,38 @@ admin socket takes lines up to 4 MiB, so anything the contract allows fits with 
 JSON escaping to spare. One character over the contract is `bad_request` from the core,
 not a closed socket.
 
+## The owner's messages: state and the agent's replies (friend slice 3, core side)
+
+The core keeps every accepted `friend.send` with its text and a state the phone reads
+through `POST /v1/friend/messages` (contract 0.6.0): `accepted` (the core has it) →
+`received` (the verifier delivered it) → `waiting` (the agent asked a decision since) →
+`answered` (the final reply is in `replies`); `rejected` (the verifier blocked it) and
+`superseded` (a newer message from the owner) end a message without an answer. A new
+message supersedes every earlier one the agent still owed an answer to. The same `id`
+sent again by the same device returns the first message's answer (a retry, not a
+second message; the same `id` with another body is refused). Texts, both ways, are
+`chat.message` entries in the Log (filter chat); the journal record carries the hash of the
+text and the ids, the text itself is in the store, where the owner can delete it later
+without breaking the journal chain (a deleted text shows as such in the Log).
+
+The agent side reports facts over the admin socket; none of them is a permission, and
+none is signed: any process running as the agent's user can send them. The phone shows
+them as the agent's report (the contract says so), not as verified; what is verified stays
+what it was: the owner's signature on the way in, the core's on the way out.
+
+| Command | Who sends it | Effect |
+|---|---|---|
+| `friend.received {id, prompt_id}` | `rh-friend-verify` after a successful check (slice 3, agent side) | `accepted` → `received` |
+| `friend.rejected {id, code, detail}` | `rh-friend-verify` when it blocks the pointer | → `rejected` |
+| `friend.reply {in_reply_to, text, prompt_id, progress}` | the Stop hook (`rh-friend-reply`) with the turn's last assistant message; `--progress` by the agent itself | final: → `answered`, or → `waiting` when an open question was asked after the message arrived; progress: a reply, state unchanged |
+
+The `kind` the phone signs (`question`, default, or `task`) and `re` (the message a
+"make it a task" follows up) are stored and shown; the agent-side verifier labels the
+message with its kind and the gate enforces it (agent side, slice 3). `[channel]
+match_prompt_id = true` makes the core refuse a reply whose `prompt_id` is not the one the
+verifier recorded for the message; it stays off until the live check that Claude Code's
+Stop hook carries the same `prompt_id` as UserPromptSubmit.
+
 ## Configuration
 
 The core config names the agent; nothing else does:

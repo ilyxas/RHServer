@@ -1,6 +1,6 @@
 {
-  "description": "friend.send. build: the phone's body is JSON with sorted keys and no spaces, {\"id\",\"text\",\"to\":<agent>}, signed with the normal key at POST /v1/friend; `agent` is the channel agent (status.channel.agent). core: requests against signed_requests.json fixture; accept spools the request as received under spool_id = first 32 hex of sha256(nonce). devices: the core's signed device list {\"payload\":\"<JCS>\",\"sig\":\"<core key over payload>\"}. envelopes: what the agent-side verifier must pass or block for a pointer ⟦rh:<spool_id>⟧ at `now` with a 900 s window and the listed nonces already seen.",
-  "version": 2,
+  "description": "friend.send. build: the phone's body is JSON with sorted keys and no spaces, {\"id\",\"text\",\"to\":<agent>} plus the optional \"kind\" (question | task, default question) and \"re\" (spool id of the message it follows up), signed with the normal key at POST /v1/friend; `agent` is the channel agent (status.channel.agent). core: requests against signed_requests.json fixture; accept spools the request as received under spool_id = first 32 hex of sha256(nonce). devices: the core's signed device list {\"payload\":\"<JCS>\",\"sig\":\"<core key over payload>\"}. envelopes: what the agent-side verifier must pass or block for a pointer ⟦rh:<spool_id>⟧ at `now` with a 900 s window and the listed nonces already seen.",
+  "version": 3,
   "agent": "Agent-Alpha",
   "core_pub_x963_b64": "BAKF7MRPp3mc38ZH/Onn+M9TSqw4sPCszPmTqcZg0mbCNx6VzTbV7TxJY20KiuLE3YmVOS2qrxItb5/9B19Xl4Y=",
   "window_s": 900,
@@ -26,6 +26,31 @@
         "X-RH-Auth": "eyJib2R5IjoiMmQzZjhhODNlN2Q4NmNlNzFiMTEzZTlhZTdkMWM0OGYwMTE4MTJlY2U4OGNkMmRmYTg3YzNhZGEyZWE3ZWQyNyIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
         "X-RH-Sig": "MEQCIH9qWFhI1GZGWRtVbPsAa6dFOpD2c7BUkk5mwrm+SrgOAiBX8imhmw1cpPdPerOPDnhn8sgSBPm5FJsdaBSoIAbQjg=="
       }
+    },
+    {
+      "name": "task",
+      "id": "m-1",
+      "text": "fix the build",
+      "kind": "task",
+      "expected_body_b64": "eyJpZCI6Im0tMSIsImtpbmQiOiJ0YXNrIiwidGV4dCI6ImZpeCB0aGUgYnVpbGQiLCJ0byI6IkFnZW50LUFscGhhIn0=",
+      "expected_body_text": "{\"id\":\"m-1\",\"kind\":\"task\",\"text\":\"fix the build\",\"to\":\"Agent-Alpha\"}",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiNDEwNTUwNWU2MjFhMWUzYWM0Y2QwMDU3MWNlN2M1YTFkYzAwZjJkYzE3ZDI1MWZlODA3MTRhY2UwMWJhYTk2NyIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIG/Mi9hH6TSZB6hnnSK2/MZ3v48VDDyjjCDU5kw2WjoOAiEA1x/Zd8+2YKKYP57GCwEUxVhM1ZyQYkVW0Mc4iQT2RAg="
+      }
+    },
+    {
+      "name": "make-it-a-task",
+      "id": "m-1",
+      "text": "go ahead",
+      "kind": "task",
+      "re": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_body_b64": "eyJpZCI6Im0tMSIsImtpbmQiOiJ0YXNrIiwicmUiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInRleHQiOiJnbyBhaGVhZCIsInRvIjoiQWdlbnQtQWxwaGEifQ==",
+      "expected_body_text": "{\"id\":\"m-1\",\"kind\":\"task\",\"re\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"text\":\"go ahead\",\"to\":\"Agent-Alpha\"}",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiYTllYzc1ODY1NTBiMGM2OTBjZGU4ZGI1ZjliNzE3OWFiNmJmNDllMjI4YjJmNmFkYzIxYTg1YjZlNTY1N2ExMSIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIDG+yaKyJTbBjh8BwdQwf3cti5VGYYHjEMACQLsO7rIYAiEA2gdqA+lUyfgvCrZFH7v0461iv/8S0QYhk2LrUR7iHd4="
+      }
     }
   ],
   "core": [
@@ -39,6 +64,56 @@
       "expect": {
         "result": "accept",
         "spool_id": "b2d34343d8e0e506c6fd53cfc3eb3911"
+      }
+    },
+    {
+      "name": "send-kind-question",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMGU4Mzg1YmJhNmIxMmE4YTg0OTIzMjQzYjc5Yzk0YWY1YjczOTczNThhMjMxYTM5ZDY3MDA5NGZkZTIwZTVmNiIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEYCIQC4FzmIvRpG0V9zgLQ4h59RiQiHvPmV7u0BZFjkIITvTAIhAM2VQE2ynHGRJ5wtaNwSo7fJA02oDBvBeUtWcz7nyrqi"
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsImtpbmQiOiJxdWVzdGlvbiIsInRleHQiOiLQn9GA0L7QstC10YDRjCDRgdCx0L7RgNC60YMg8J+agCIsInRvIjoiQWdlbnQtQWxwaGEifQ==",
+      "expect": {
+        "result": "accept",
+        "spool_id": "b2d34343d8e0e506c6fd53cfc3eb3911"
+      }
+    },
+    {
+      "name": "send-task-re",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiNDFhMTQ4OTUyZjdiYjE2MDVjMzYzZjIxZTU4YmJiZjI0NTFmNzQ0NzE1YTI1OWZjMDA4MDI3MGY4ZDAzMjVmYyIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEQCIA/RjsC1GErNznMRo+rJZqjMCsGrrklMY6nGjj7l3ctFAiBucQiw05sQcunGoBmeb7TNcOI+YMtt43AsXnuyWUJKWQ=="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsImtpbmQiOiJ0YXNrIiwicmUiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInRleHQiOiLQv9GA0L7QtNC+0LvQttCw0Lkg0LrQsNC6INC30LDQtNCw0YfRgyIsInRvIjoiQWdlbnQtQWxwaGEifQ==",
+      "expect": {
+        "result": "accept",
+        "spool_id": "b2d34343d8e0e506c6fd53cfc3eb3911"
+      }
+    },
+    {
+      "name": "send-kind-bad",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiNjc1ODRhNmE0YTJiODNjZWRkNjY1MWI5N2JhYjZhZjY4Y2VkYWZmMWZjZWJlMDM4Mjg3MTE0MTY5ZWE0NjZmOCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIQDrphrTY6UuS2dZLAsTq/nKm2OmYyWEQ3ZsPvmbG280iAIgcpKl08OPcMSiWTSvIQqEzfqg0FplcBY9LVpZl3KUBGo="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsImtpbmQiOiJqb2IiLCJ0ZXh0Ijoi0J/RgNC+0LLQtdGA0Ywg0YHQsdC+0YDQutGDIPCfmoAiLCJ0byI6IkFnZW50LUFscGhhIn0=",
+      "expect": {
+        "result": "reject",
+        "code": "bad_request",
+        "status": 400
+      }
+    },
+    {
+      "name": "send-re-bad",
+      "headers": {
+        "X-RH-Auth": "eyJib2R5IjoiMmI0ZjY0ZDQ4ODVmMGJjMzhlZmFjODM1NzI1YTY4NWRmOTY5ZGFiMDlkN2M4YzBmMmRkNjJlNDg2ZDg2N2JhMCIsImRldmljZSI6ImQ3NWVhNjhjZTg5OTE2NjIzMzQ1MTllMGU4MDZhMzM4IiwiZXhwIjoiMjAyNi0xMC0xOVQxMjowMTowMFoiLCJrZXkiOiJub3JtYWwiLCJub25jZSI6IkNhNFp4aXdxU3NNMnZabUpLVkc0ZmhlMGhqdlRqcEV5V2EzN1dXekY4OTg9Iiwib3AiOiJmcmllbmQuc2VuZCIsInRzIjoiMjAyNi0xMC0xOVQxMjowMDowMFoiLCJ2IjoxfQ==",
+        "X-RH-Sig": "MEUCIQCEDwoLb1B7iINC/RId18PDx9FV+0Dc+Acsry+KaPZurAIgeSoGzlpJmohsa3idrnw3Fc8Ti3Jr6qtlNWM8qkbbw2I="
+      },
+      "body_b64": "eyJpZCI6Im0tMSIsInJlIjoibS0xIiwidGV4dCI6ItCf0YDQvtCy0LXRgNGMINGB0LHQvtGA0LrRgyDwn5qAIiwidG8iOiJBZ2VudC1BbHBoYSJ9",
+      "expect": {
+        "result": "reject",
+        "code": "bad_request",
+        "status": 400
       }
     },
     {

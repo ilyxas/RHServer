@@ -89,7 +89,11 @@ def test_build_vectors_verify_as_requests(core: Core) -> None:
     assert r.status_code == 200, r.text
     for v in FRIEND["build"]:
         doc = json.loads(b64d(v["expected_body_b64"]))
-        assert doc == {"id": v["id"], "text": v["text"], "to": FRIEND["agent"]}
+        expected = {"id": v["id"], "text": v["text"], "to": FRIEND["agent"]}
+        for key in ("kind", "re"):  # only in the body when the phone sets them
+            if key in v:
+                expected[key] = v[key]
+        assert doc == expected
         assert b64d(v["expected_body_b64"]).decode() == v["expected_body_text"]
 
 

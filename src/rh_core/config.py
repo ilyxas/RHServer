@@ -43,6 +43,9 @@ class Channel:
     inbox_dir: Path | None = None  # envelopes for the bridge; default data_dir/inbox
     devices_file: Path | None = None  # signed device list; default data_dir/devices.json
     decide_window_s: int = DEFAULT_DECIDE_WINDOW_S  # how old an allow may be when spent
+    # A reply must name the prompt the verifier recorded for the message. Off until the
+    # live check that Claude Code's Stop hook carries the same prompt_id as UserPromptSubmit.
+    match_prompt_id: bool = False
 
 
 @dataclass(frozen=True)
@@ -203,7 +206,15 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> Config:
     return Config(**kwargs)
 
 
-_CHANNEL_KEYS = {"agent", "project_dir", "target", "inbox_dir", "devices_file", "decide_window_s"}
+_CHANNEL_KEYS = {
+    "agent",
+    "project_dir",
+    "target",
+    "inbox_dir",
+    "devices_file",
+    "decide_window_s",
+    "match_prompt_id",
+}
 TARGET_RE = re.compile(r"\A[A-Za-z0-9_.:-]{1,64}\Z")
 
 
@@ -235,8 +246,16 @@ def channel_from_dict(table: Any, base: Path = Path(".")) -> Channel:
     window = table.get("decide_window_s", DEFAULT_DECIDE_WINDOW_S)
     if isinstance(window, bool) or not isinstance(window, int) or window < 1:
         raise ConfigError("[channel] decide_window_s must be a positive integer (seconds)")
+    match = table.get("match_prompt_id", False)
+    if not isinstance(match, bool):
+        raise ConfigError("[channel] match_prompt_id must be true or false")
     return Channel(
-        agent=agent, project_dir=project, target=table["target"], decide_window_s=window, **paths
+        agent=agent,
+        project_dir=project,
+        target=table["target"],
+        decide_window_s=window,
+        match_prompt_id=match,
+        **paths,
     )
 
 
@@ -383,4 +402,6 @@ def channel_toml(ch: Channel) -> list[str]:
             lines.append(f"{key} = {q(value)}")
     if ch.decide_window_s != DEFAULT_DECIDE_WINDOW_S:
         lines.append(f"decide_window_s = {ch.decide_window_s}")
+    if ch.match_prompt_id:
+        lines.append("match_prompt_id = true")
     return lines

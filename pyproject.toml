@@ -64,6 +64,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/test_friend_decide.py" = ["F811"]  # the `env` fixture is imported from test_core_flow
+"tests/test_friend_messages.py" = ["F811"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -161,7 +161,7 @@ def fill(journal: Journal) -> None:
     journal.append("challenge", device=DEV_B, result="rejected", reason="unknown_device")
     journal.append("request", op="devices.revoke", device=DEV_A, result="accepted")
     journal.append("device.revoked", device=DEV_B, by=DEV_A)
-    journal.append("chat.message", author="owner", text="hello")
+    journal.append("chat.message", author="owner", agent="Agent-Alpha", text="hello")
     journal.append("approval.requested", approval="x1")
     journal.append("pairing", result="rejected", reason="bad_pair_code", detail="expired")
     journal.append("core.stopped")
@@ -188,7 +188,7 @@ def test_feed_all_newest_first(journal_dir: Path) -> None:
         "Core stopped",
         "Pairing rejected: bad_pair_code",
         "approval.requested",
-        "chat.message",
+        "owner → Agent-Alpha",
         "Revoked b" + "b" * 7,
         "Rejected challenge: unknown_device",
         "Rejected ping: bad_signature",
@@ -228,7 +228,7 @@ def test_feed_entry_fields(journal_dir: Path) -> None:
     [
         ("commands", ["Revoked bbbbbbbb", "Paired Мой iPhone"]),
         ("approvals", ["approval.requested"]),
-        ("chat", ["chat.message"]),
+        ("chat", ["owner → Agent-Alpha"]),
         (
             "errors",
             [

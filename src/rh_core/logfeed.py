@@ -36,6 +36,8 @@ _DEVICE_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 _CURSOR_RE = re.compile(r"\A(\d{8}):([1-9]\d{0,9})\Z")
 
 Names = Callable[[str], str | None]
+# The text behind a chat.message record (kept in the core's store, not in the journal).
+Texts = Callable[[dict[str, Any]], str | None]
 
 
 class BadCursor(ValueError):
@@ -73,7 +75,8 @@ def kind_of(record: dict[str, Any], *, include_reads: bool = False) -> str | Non
         return "approval"
     if event.startswith("chat."):
         return "chat"
-    # friend.message stays kind system: the chat filter is the RemoteHands chat (stage 3).
+    # friend.message.* (receipts, state changes) stay kind system; the texts themselves are
+    # chat.message records, kind chat.
     if event.startswith("friend.question") or event.startswith("friend.decision"):
         return "approval"  # the owner's decisions for the channel agent, like approvals
     if result in ("rejected", "error", "failed"):
@@ -98,8 +101,11 @@ def _short(value: Any) -> str:
     return value[:8] if isinstance(value, str) else "?"
 
 
-def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
-    """Title and detail of an entry: one line, English, ready to show."""
+def render(
+    record: dict[str, Any], names: Names, texts: Texts | None = None
+) -> tuple[str, str | None]:
+    """Title and detail of an entry: one line, English, ready to show. `texts` resolves the
+    text of a chat.message record from the store (the journal keeps only its hash)."""
     event = str(record.get("event", ""))
     result = record.get("result")
     reason = record.get("reason")
@@ -133,8 +139,43 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
         by = record.get("by")
         by_text = "from the terminal" if by == "terminal" else f"by {name(by)}"
         return f"Revoked {name(record.get('device'))}", by_text
+    if event == "chat.message":
+        # One entry per message, title = "owner → <agent>" or "<agent> → owner", detail =
+        # the text, read from the store (the journal keeps text_sha256 and the ids, so a
+        # text can be deleted without breaking the chain). Older seeds with the text in
+        # the record show it as is; a deleted text shows as such.
+        author = record.get("author")
+        text = _text(record.get("text"))
+        if text is None:
+            text = texts(record) if texts is not None else None
+            if text is None and record.get("text_sha256"):
+                text = "(text not in the journal; deleted from the core or read without it)"
+        if author == "owner":
+            return f"owner → {who}", text
+        if isinstance(author, str) and author:
+            return f"{author} → owner", text
+        return event, text
     if event == "friend.message":
         return f"Message to {who} from {name(record.get('device'))}", None
+    if event == "friend.message.retry":
+        return f"Message to {who} sent again", f"message {_short(record.get('id'))}"
+    if event == "friend.message.received":
+        return f"{who} received the message", f"message {_short(record.get('id'))}"
+    if event == "friend.message.rejected":
+        return f"{who} did not accept the message: {reason}", f"message {_short(record.get('id'))}"
+    if event == "friend.message.superseded":
+        return (
+            f"Message to {who} replaced by a newer one",
+            f"message {_short(record.get('id'))}, by {_short(record.get('by'))}",
+        )
+    if event == "friend.message.waiting":
+        return f"{who} is waiting for a decision", f"message {_short(record.get('id'))}"
+    if event == "friend.message.progress":
+        return f"{who} reported progress", f"message {_short(record.get('id'))}"
+    if event == "friend.message.answered":
+        return f"{who} answered", f"message {_short(record.get('id'))}"
+    if event == "friend.reply.unmatched":
+        return f"{who}'s reply names another prompt", f"message {_short(record.get('id'))}"
     if event == "friend.question":
         return f"{who} asks for a decision", f"question {_short(record.get('id'))}"
     if event == "friend.question.withdrawn":
@@ -171,12 +212,17 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
 
 
 def entry(
-    record: dict[str, Any], line: bytes, names: Names, *, include_reads: bool = False
+    record: dict[str, Any],
+    line: bytes,
+    names: Names,
+    *,
+    include_reads: bool = False,
+    texts: Texts | None = None,
 ) -> dict[str, Any] | None:
     kind = kind_of(record, include_reads=include_reads)
     if kind is None:
         return None
-    title, detail = render(record, names)
+    title, detail = render(record, names, texts)
     ts = str(record.get("ts", ""))
     out: dict[str, Any] = {
         "id": sha256_hex(line),
@@ -219,6 +265,7 @@ def page(
     before: str | None = None,
     limit: int = DEFAULT_LIMIT,
     include_reads: bool = False,
+    texts: Texts | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """One page of the feed and the cursor of the next (older) page, or None."""
     kinds = FILTERS[filter]
@@ -234,7 +281,7 @@ def page(
             continue  # `rhcore journal verify` reports broken lines
         if not isinstance(record, dict):
             continue
-        e = entry(record, line, names, include_reads=include_reads)
+        e = entry(record, line, names, include_reads=include_reads, texts=texts)
         if e is None or (kinds is not None and e["kind"] not in kinds):
             continue
         if needle is not None and not _matches(e, needle):
