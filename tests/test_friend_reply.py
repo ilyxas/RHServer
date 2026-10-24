@@ -125,9 +125,44 @@ def test_unreachable_core_defers_and_flush_sends_in_order(tmp_path: Path) -> Non
     assert [json.loads(line)["text"] for line in pending.read_text().splitlines()] == ["one", "two"]
     assert read_current(cfg) is not None  # not answered until the core says so
     # Without a [gate] there is no socket: nothing goes through, the file stays.
-    assert core_socket.flush_pending(cfg) == 0
+    assert core_socket.flush_pending(cfg) == []
     assert pending.exists()
-    assert core_socket.flush_pending(cfg) == 0
+
+
+def test_flush_settles_the_note_when_the_core_answers(env: Any, tmp_path: Path) -> None:
+    """A reply deferred while the core was down: the next hook call delivers it, and the
+    core's `answered` closes the note, so the next turn is nobody's reply."""
+    from rh_friend.verify import handle as verify_handle
+    from rh_friend.verify import settle_pending
+
+    core, client, clock, _ = env
+    phone = Phone()
+    pair(core, client, phone)
+    cfg = friend_cfg(core, tmp_path)
+    sent = signed(client, phone, "POST", "/v1/friend", OP_SEND, "normal", body("ping?"))
+    sid = sent.json()["id"]
+    verify_handle({"prompt": f"⟦rh:{sid}⟧"}, cfg, project_dir=str(cfg.project_dir))
+    # The Stop hook could not reach the core: deferred.
+    assert reply.handle_stop({"last_assistant_message": "pong"}, cfg, report=lambda m: None) == {
+        "deferred": True
+    }
+    assert read_current(cfg) is not None and core_socket.pending_file(cfg).exists()
+    # Any later hook call flushes; the core marks it answered; the note is closed.
+    settle_pending(cfg)
+    assert not core_socket.pending_file(cfg).exists()
+    row = core.store.message(sid)
+    assert row is not None and row.state == "answered"
+    assert read_current(cfg) is None
+    # The same through an unsigned prompt of the verifier (the usual next hook call).
+    sent = signed(
+        client, phone, "POST", "/v1/friend", OP_SEND, "normal", body("again?", msg_id="m-2")
+    )
+    sid = sent.json()["id"]
+    verify_handle({"prompt": f"⟦rh:{sid}⟧"}, cfg, project_dir=str(cfg.project_dir))
+    reply.handle_stop({"last_assistant_message": "yes"}, cfg, report=lambda m: None)
+    verify_handle({"prompt": "hello"}, cfg, project_dir=str(cfg.project_dir))
+    assert core.store.message(sid).state == "answered"  # type: ignore[union-attr]
+    assert read_current(cfg) is None
 
 
 def test_text_is_capped_at_the_contract(tmp_path: Path) -> None:

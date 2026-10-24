@@ -227,12 +227,15 @@ def handle(
         report = _reporter(cfg)
     prompt = str(event.get("prompt", ""))
     match = POINTER_RE.match(prompt.strip())
+    settle_pending(cfg)  # a reply the Stop hook could not deliver
     if match is None:
+        # The owner (or whoever holds the keyboard) typed into the session: a question from
+        # the phone no longer shapes what the session may do. The message stays open, so
+        # the Stop hook still answers it; only the mode is lifted.
+        lift_question_mode(cfg)
         return _context(UNSIGNED_LABEL)
     sid = match.group(1)
     at = now()
-    with contextlib.suppress(Exception):
-        core_socket.flush_pending(cfg)  # a reply the Stop hook could not deliver
     try:
         if cfg.require_protected:
             _check_protected(cfg)
@@ -267,8 +270,15 @@ def handle(
     assert verified.message is not None
     message = verified.message
     prompt_id = event.get("prompt_id") if isinstance(event.get("prompt_id"), str) else None
-    with contextlib.suppress(Exception):  # the note is for the gate and the Stop hook
+    try:  # the note is for the gate and the Stop hook; its loss must not block the message
         write_current(cfg, id=sid, kind=message.kind, prompt_id=prompt_id, at=at)
+    except Exception as e:
+        print(f"rh-friend-verify: cannot write {cfg.current_file}: {e}", file=sys.stderr)
+        with contextlib.suppress(OSError):
+            _append(
+                cfg.rejected_log,
+                {"at": _ts(at), "id": sid, "code": "note_not_written", "detail": str(e)},
+            )
     with contextlib.suppress(Exception):
         report({"cmd": "friend.received", "id": sid, "prompt_id": prompt_id, "kind": message.kind})
     label = label[:-1] + f" · {message.kind}]"
@@ -294,12 +304,7 @@ def write_current(
     cfg: FriendConfig, *, id: str, kind: str, prompt_id: str | None, at: datetime
 ) -> None:
     """Note the owner's message the session is now on, atomically."""
-    path = cfg.current_file
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc = {"open": {"id": id, "kind": kind, "prompt_id": prompt_id, "at": _ts(at)}}
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    _write_note(cfg, {"open": {"id": id, "kind": kind, "prompt_id": prompt_id, "at": _ts(at)}})
 
 
 def read_current(cfg: FriendConfig) -> dict[str, Any] | None:
@@ -316,15 +321,46 @@ def read_current(cfg: FriendConfig) -> dict[str, Any] | None:
     return open_
 
 
+def lift_question_mode(cfg: FriendConfig) -> None:
+    """Keep the open message, drop its question mode (the owner is at the keyboard)."""
+    current = read_current(cfg)
+    if current is None or current.get("kind") != "question":
+        return
+    with contextlib.suppress(Exception):
+        _write_note(cfg, {"open": {**current, "kind": "task", "lifted_at": _ts(_now())}})
+
+
+def settle_pending(cfg: FriendConfig) -> None:
+    """Send deferred reports; a reply the core now answers settles the note."""
+    try:
+        for msg, answer in core_socket.flush_pending(cfg):
+            apply_reply_answer(cfg, msg, answer)
+    except Exception as e:  # never a reason to block a prompt
+        print(f"rh-friend-verify: pending reports: {e}", file=sys.stderr)
+
+
+def apply_reply_answer(cfg: FriendConfig, msg: dict[str, Any], answer: dict[str, Any]) -> None:
+    """What the core said to a friend.reply: answered or closed forgets the open note."""
+    if msg.get("cmd") != "friend.reply" or not isinstance(msg.get("in_reply_to"), str):
+        return
+    if (answer.get("ok") and answer.get("state") == "answered") or answer.get("error") == "closed":
+        close_current(cfg, str(msg["in_reply_to"]))
+
+
+def _write_note(cfg: FriendConfig, doc: dict[str, Any]) -> None:
+    path = cfg.current_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def close_current(cfg: FriendConfig, message_id: str) -> None:
     """Forget the open message if it is this one (answered or closed by the core)."""
     current = read_current(cfg)
     if current is None or current.get("id") != message_id:
         return
-    path = cfg.current_file
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps({"open": None}) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    _write_note(cfg, {"open": None})
 
 
 def pointer_of(sid: str) -> str:

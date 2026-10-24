@@ -77,14 +77,15 @@ def defer(cfg: FriendConfig, msg: dict[str, Any]) -> None:
         fh.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
 
-def flush_pending(cfg: FriendConfig) -> int:
-    """Send the deferred reports in order; stop at the first that still fails. Returns how
-    many went through. Never raises."""
+def flush_pending(cfg: FriendConfig) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Send the deferred reports in order; stop at the first that still fails. Returns the
+    (report, answer) pairs that went through. Never raises."""
     path = pending_file(cfg)
     try:
         lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except OSError:
-        return 0
+        return []
+    delivered: list[tuple[dict[str, Any], dict[str, Any]]] = []
     sent = 0
     for line in lines:
         try:
@@ -92,8 +93,13 @@ def flush_pending(cfg: FriendConfig) -> int:
         except ValueError:
             sent += 1  # unreadable: drop it
             continue
-        if not isinstance(msg, dict) or report(cfg, msg) is None:
+        if not isinstance(msg, dict):
+            sent += 1
+            continue
+        answer = report(cfg, msg)
+        if answer is None:
             break
+        delivered.append((msg, answer))
         sent += 1
     rest = lines[sent:]
     with contextlib.suppress(OSError):
@@ -103,7 +109,7 @@ def flush_pending(cfg: FriendConfig) -> int:
             os.replace(tmp, path)
         else:
             path.unlink(missing_ok=True)
-    return sent
+    return delivered
 
 
 __all__ = [

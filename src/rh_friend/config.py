@@ -69,19 +69,12 @@ GATE_LOG = Path("log/rh_gate.jsonl")
 STATE_FILE = Path("state/rh_current.json")  # the owner's message the session is on
 DEFAULT_REPORT_TIMEOUT_S = 2.0
 # Question mode (the owner sent a question, not a task): these tools run freely, every
-# other call is treated as protected and goes through a decision or a task.
-DEFAULT_QUESTION_TOOLS = (
-    "Read",
-    "Glob",
-    "Grep",
-    "LS",
-    "WebFetch",
-    "WebSearch",
-    "TodoWrite",
-    "Task",
-    "AskUserQuestion",
-)
-# Read-only shell commands, by first word of every segment; see gate.read_only_bash.
+# other call is treated as protected and goes through a decision or a task. WebFetch and
+# WebSearch are not here: a URL can carry data out; the owner adds them if wanted.
+DEFAULT_QUESTION_TOOLS = ("Read", "Glob", "Grep", "LS", "TodoWrite", "Task", "AskUserQuestion")
+# Read-only shell commands, by the first word(s) of every segment; gate.read_only_bash also
+# rejects the flags that make one of them write or run something. Short on purpose: every
+# entry was checked for a way to write, delete or execute; a longer list is a longer audit.
 DEFAULT_QUESTION_BASH = (
     "ps",
     "top",
@@ -124,9 +117,6 @@ DEFAULT_QUESTION_BASH = (
     "gh pr list",
     "gh pr checks",
     "gh run list",
-    "uv run pytest",
-    "uv run ruff check",
-    "uv run mypy",
     "tmux list-sessions",
     "tmux list-windows",
     "tmux capture-pane",
@@ -135,14 +125,10 @@ DEFAULT_QUESTION_BASH = (
     "sort",
     "uniq",
     "cut",
-    "awk",
-    "sed",
     "tr",
-    "xxd",
     "jq",
-    "python3 -c",
-    "python -c",
 )
+DEFAULT_QUESTION_TTL_S = 1800  # a question older than this no longer sets the mode
 
 
 class ConfigError(ValueError):
@@ -192,6 +178,7 @@ class GateConfig:
     ask: Path | None = None  # rh-friend-ask; None: the one next to this interpreter
     question_tools: tuple[str, ...] = DEFAULT_QUESTION_TOOLS
     question_bash: tuple[str, ...] = DEFAULT_QUESTION_BASH
+    question_ttl_s: int = DEFAULT_QUESTION_TTL_S
     report_timeout_s: float = DEFAULT_REPORT_TIMEOUT_S  # for the hooks' receipts and replies
 
 
@@ -335,6 +322,7 @@ def _gate(table: Any, path: Any, project: Path) -> GateConfig:
         "ask",
         "question_tools",
         "question_bash",
+        "question_ttl_s",
         "report_timeout_s",
     }
     if unknown:
@@ -351,6 +339,9 @@ def _gate(table: Any, path: Any, project: Path) -> GateConfig:
         if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
             raise ConfigError(f"[gate] {key} must be a list of non-empty strings")
         lists[key] = tuple(value)
+    ttl = table.get("question_ttl_s", DEFAULT_QUESTION_TTL_S)
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl < 1:
+        raise ConfigError("[gate] question_ttl_s must be a positive integer (seconds)")
     report_timeout = table.get("report_timeout_s", DEFAULT_REPORT_TIMEOUT_S)
     if isinstance(report_timeout, bool) or not isinstance(report_timeout, int | float):
         raise ConfigError("[gate] report_timeout_s must be a number of seconds")
@@ -378,6 +369,7 @@ def _gate(table: Any, path: Any, project: Path) -> GateConfig:
         protected=tuple(_rule(r) for r in rules),
         question_tools=lists["question_tools"],
         question_bash=lists["question_bash"],
+        question_ttl_s=ttl,
         report_timeout_s=float(report_timeout),
     )
 

@@ -28,7 +28,7 @@ from rh_common.friend import MAX_TEXT
 from rh_friend import config as friend_config
 from rh_friend import core_socket
 from rh_friend.config import FriendConfig
-from rh_friend.verify import Report, close_current, read_current
+from rh_friend.verify import Report, apply_reply_answer, read_current, settle_pending
 
 
 def reply(
@@ -61,11 +61,7 @@ def reply(
         return {"deferred": True}
     if not isinstance(answer, dict):
         return None
-    if answer.get("ok"):
-        if answer.get("state") in ("answered",):
-            close_current(cfg, current["id"])
-    elif answer.get("error") == "closed":
-        close_current(cfg, current["id"])  # superseded or rejected: nothing more to say
+    apply_reply_answer(cfg, msg, answer)  # answered or closed: nothing more to say
     return answer
 
 
@@ -97,8 +93,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rh-friend-reply: {e}", file=sys.stderr)
         return 0 if args.progress is None and not args.flush else 2
     if args.flush:
-        sent = core_socket.flush_pending(cfg)
-        print(f"sent {sent} deferred report(s)", file=sys.stderr)
+        pending = core_socket.pending_file(cfg)
+
+        def count() -> int:
+            return len(pending.read_text().splitlines()) if pending.exists() else 0
+
+        before = count()
+        settle_pending(cfg)
+        print(f"sent {before - count()} of {before} deferred report(s)", file=sys.stderr)
         return 0
     if args.progress is not None:
         answer = reply(cfg, args.progress, prompt_id=None, progress=True)
@@ -129,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rh-friend-reply: {e}", file=sys.stderr)
         return 0
     try:
-        core_socket.flush_pending(cfg)
+        settle_pending(cfg)
         handle_stop(event, cfg)
     except Exception as e:  # a reply must never break the session
         print(f"rh-friend-reply: {type(e).__name__}: {e}", file=sys.stderr)

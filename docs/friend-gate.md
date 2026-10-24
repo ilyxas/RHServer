@@ -109,11 +109,20 @@ same `prompt_id` as UserPromptSubmit.
 - **The label.** `[RH ✔ owner · <device> · <time> · question]` or `· task`, then one line
   of hint for the model, then the text.
 - **Question mode** (the note says `question`): the gate lets `[gate] question_tools`
-  (Read, Glob, Grep, LS, WebFetch, WebSearch, TodoWrite, Task, AskUserQuestion) and
-  read-only shell commands (`[gate] question_bash`: the first words of every segment
-  split at `|`, `||`, `&&`, `;` and newlines must be listed, e.g. `ps`, `vm_stat`, `git
-  log`; no `<`, `>`, `&>`, backticks, `$(`, and no `sudo`, `tee`, `xargs`, `env`, `eval`,
-  `exec`, `find -exec`) through as they are. Every other call is protected under the rule
+  (Read, Glob, Grep, LS, TodoWrite, Task, AskUserQuestion; WebFetch and WebSearch are not
+  in the default because a URL can carry data out of the Mac, the owner adds them if
+  wanted) and read-only shell commands (`[gate] question_bash`: the first words of every
+  segment split at `|`, `||`, `&&`, `;` and newlines must be listed, e.g. `ps`, `vm_stat`,
+  `git log`; no `<`, `>`, `&>`, a lone `&`, backticks or `$(`; and per command the flags
+  that write or run something are refused: `sort -o`, a second file for `uniq`, `find
+  -exec/-ok/-delete/-fprint*/-fls`, `rg --pre`, `git … --output`, anything of `git branch`
+  but listing, anything of `git remote` but `-v`/`show`/`get-url`, `sysctl -w`, `date`
+  with a positional or `-s`, `gh … --web`, `tmux capture-pane -b`; `sed`, `awk`, `python`,
+  `uv run` are not in the list at all) through as they are. The mode is lifted when the
+  owner types into the session (an unsigned prompt turns the note into a task; the
+  message stays open, so the Stop hook still answers it) and expires after `[gate]
+  question_ttl_s` (30 min), so a deferred reply, a turn that ended with a question to
+  the owner, or an interrupted turn never leaves the terminal blocked. Every other call is protected under the rule
   `question mode ⟦rh:<id>⟧`: blocked with a reason that names `rh-friend-ask`, so the
   agent asks for exactly that call and the owner answers Allow or Deny on the phone, like
   any protected action; or the agent answers in text and says the work needs a task; or
@@ -122,6 +131,9 @@ same `prompt_id` as UserPromptSubmit.
   closed one or an unreadable one is "no mode": the rules alone (fail open for the
   convenience, fail closed for the rules). The lists are a convenience for the owner's
   questions, not a sandbox: see "Known limitations".
+- **The note is best effort.** If it cannot be written, the message still reaches the
+  model; the failure goes to stderr and `log/rh_rejected.jsonl` (`note_not_written`), and
+  the previous note stays in force.
 - **Receipts.** After a successful check the verifier tells the core `friend.received`
   (with Claude Code's `prompt_id`); when it blocks a pointer, `friend.rejected`. Both go
   over `[gate] admin_socket` with `[gate] report_timeout_s` (2 s) and change no verdict

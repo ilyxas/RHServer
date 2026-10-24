@@ -186,46 +186,158 @@ def rule_for(
 # --- question mode ------------------------------------------------------------------------
 
 _SPLIT_RE = re.compile(r"\|\||&&|[|;\n]")
-_REDIRECT_RE = re.compile(r"(^|[^<>])[<>]|&>|\$\(|`")
+_FORBIDDEN_RE = re.compile(r"[<>`]|\$\(|(?<!&)&(?!&)")  # redirects, substitution, a lone &
+_FLAG_RE = re.compile(r"\A-")
 
 
 def read_only_bash(command: str, allowed: tuple[str, ...]) -> bool:
     """True when every segment of the command (split at |, ||, &&, ; and newlines) starts
-    with one of the allowed spellings (first word, or first words such as "git log") and
-    nothing redirects, substitutes or escalates (no < > &> `backticks` $( ), no sudo, tee,
-    xargs, env or eval as a word). The list is a convenience for the owner's questions,
-    not a sandbox: the protected rules still apply first, and a task lifts the mode."""
+    with an allowed spelling (its first word, or first words such as "git log") and carries
+    none of the flags that make that command write or run something (_WRITE_FLAGS). Nothing
+    may redirect (< > &>), substitute ($( ) or backticks) or background (a lone &).
+
+    The split is more eager than a shell's (quoted operators split too), so the gate sees
+    at least every command the shell would run, never fewer. A convenience for the owner's
+    questions, not a sandbox: the protected rules apply first, and a task lifts the mode."""
     if not isinstance(command, str) or not command.strip():
         return False
-    if _REDIRECT_RE.search(command):
+    if _FORBIDDEN_RE.search(command):
         return False
     for segment in _SPLIT_RE.split(command):
         words = segment.strip().split()
         if not words:
             continue
-        if any(w in _NEVER_READ_ONLY or _runs_something(w) for w in words):
+        spelling = _allowed_spelling(words, allowed)
+        if spelling is None:
             return False
-        head = " ".join(words[:3])
-        if not any(head == a or head.startswith(a + " ") for a in allowed):
+        rest = words[len(spelling.split()) :]
+        check = _WRITE_FLAGS.get(spelling, _WRITE_FLAGS.get(spelling.split()[0], _no_flags))
+        if not check(rest):
             return False
     return True
 
 
-_NEVER_READ_ONLY = frozenset({"sudo", "tee", "xargs", "env", "eval", "exec", "nohup", "source"})
-_DASHED_RUNNERS = frozenset({"exec", "execdir", "ok", "okdir", "delete"})  # find's actions
+def _allowed_spelling(words: list[str], allowed: tuple[str, ...]) -> str | None:
+    for n in (3, 2, 1):
+        head = " ".join(words[:n])
+        if head in allowed:
+            return head
+    return None
 
 
-def _runs_something(word: str) -> bool:
-    return word.startswith("-") and word.lstrip("-") in _DASHED_RUNNERS
+Check = Callable[[list[str]], bool]
+
+
+def _no_flags(rest: list[str]) -> bool:
+    return True
+
+
+def _without(
+    *flags: str, positional: int | None = None, long_prefixes: tuple[str, ...] = ()
+) -> Check:
+    """Reject the listed short flags (also inside combined ones like -ro), long flags
+    (exact or with =value) and prefixes, and more than `positional` non-flag words."""
+    shorts = {f[1:] for f in flags if re.fullmatch(r"-[A-Za-z]", f)}
+    longs = {f for f in flags if f.startswith("--")}
+
+    def check(rest: list[str]) -> bool:
+        count = 0
+        for word in rest:
+            if word == "--":
+                continue
+            if word.startswith("--"):
+                name = word.split("=", 1)[0]
+                if name in longs or any(name.startswith(p) for p in long_prefixes):
+                    return False
+            elif _FLAG_RE.match(word) and len(word) > 1:
+                if any(c in shorts for c in word[1:]) or any(
+                    word.startswith(p) for p in long_prefixes
+                ):
+                    return False
+            else:
+                count += 1
+        return positional is None or count <= positional
+
+    return check
+
+
+def _git_remote(rest: list[str]) -> bool:
+    """`git remote`, `-v`, `show …`, `get-url …` list; every other subcommand changes it."""
+    if not rest:
+        return True
+    if rest[0] in ("-v", "--verbose"):
+        return len(rest) == 1
+    return rest[0] in ("show", "get-url")
+
+
+def _date(rest: list[str]) -> bool:
+    """`date`, `date +%s`, `date -u`: no `-s` and no positional (both set the clock)."""
+    return all(w.startswith("+") or (w.startswith("-") and w != "-s") for w in rest)
+
+
+_WRITE_FLAGS: dict[str, Check] = {
+    "sort": _without("-o", "--output"),
+    "uniq": _without(positional=1),  # a second file is the output
+    "find": _without(long_prefixes=("-fprint", "-fls", "-exec", "-ok", "-delete")),
+    "rg": _without("--pre", "--pre-glob"),
+    "git log": _without("--output"),
+    "git diff": _without("--output"),
+    "git show": _without("--output"),
+    "git status": _without("--output"),
+    "git rev-parse": _without("--output"),
+    # git branch lists only: no new name, no delete/move/copy/upstream flags.
+    "git branch": _without(
+        "-d",
+        "-D",
+        "-m",
+        "-M",
+        "-c",
+        "-C",
+        "-u",
+        "-f",
+        "-t",
+        "--delete",
+        "--move",
+        "--copy",
+        "--force",
+        "--track",
+        "--set-upstream-to",
+        "--unset-upstream",
+        "--edit-description",
+        "--create-reflog",
+        positional=0,
+    ),
+    "git remote": _git_remote,
+    "sysctl": _without("-w", "--write"),
+    "date": _date,  # +format only; a positional sets the clock
+    "gh pr view": _without("-w", "--web"),
+    "gh pr list": _without("-w", "--web"),
+    "gh pr checks": _without("-w", "--web", "--watch"),
+    "gh run list": _without("-w", "--web"),
+    "tmux capture-pane": _without("-b"),  # -b writes to a buffer; -p prints
+    "launchctl print": _without(),
+}
+
+
+def _older_than(stamp: Any, seconds: int) -> bool:
+    try:
+        at = parse_ts(str(stamp))
+    except ValueError:
+        return True
+    return datetime.now(UTC) - at > timedelta(seconds=seconds)
 
 
 def question_rule(cfg: FriendConfig, tool_name: str, tool_input: Any) -> str | None:
     """In question mode, the synthetic rule a non-read-only call falls under, else None.
-    No note, a closed one or an unreadable one means no mode (the rules alone)."""
+    No note, a closed, unreadable or expired one means no mode (the rules alone); so does
+    a note the verifier turned into a task because the owner typed at the keyboard."""
     current = read_current(cfg)
     if current is None or current.get("kind") != "question":
         return None
     gate = cfg.gate
+    ttl = gate.question_ttl_s if gate is not None else friend_config.DEFAULT_QUESTION_TTL_S
+    if _older_than(current.get("at"), ttl):
+        return None  # a question this old no longer shapes what the session may do
     tools = gate.question_tools if gate is not None else friend_config.DEFAULT_QUESTION_TOOLS
     if tool_name in tools:
         return None

@@ -1377,20 +1377,32 @@ def test_admin_socket_friend_commands_validate(env: Any) -> None:
 
 
 def _note(cfg: FriendConfig, kind: str) -> None:
+    from datetime import UTC, datetime
+
     from rh_friend.verify import write_current
 
-    write_current(cfg, id="c" * 32, kind=kind, prompt_id="p-1", at=NOW)
+    # Stamped now: a note older than [gate] question_ttl_s sets no mode.
+    write_current(cfg, id="c" * 32, kind=kind, prompt_id="p-1", at=datetime.now(UTC))
 
 
 def test_read_only_bash() -> None:
     allowed = gate.friend_config.DEFAULT_QUESTION_BASH
     for ok in (
         "ps aux | grep -i xcode",
+        "ps aux | grep python",  # a word inside a segment is an argument, not a command
         "vm_stat; top -l 1 | head -20",
         "git log --oneline -5 && git status",
+        "git branch -a",
+        "git remote -v",
+        "git remote show origin",
         "df -h /",
-        "uv run pytest -q tests/test_x.py",
         "launchctl list | grep rh",
+        "date +%s",
+        "sort -r f | uniq -c",
+        "find . -name x",
+        "tmux capture-pane -p -t friend",
+        "gh pr view 20",
+        "sysctl -n hw.memsize",
     ):
         assert gate.read_only_bash(ok, allowed), ok
     for bad in (
@@ -1406,9 +1418,73 @@ def test_read_only_bash() -> None:
         "python3 script.py",
         "",
         "   ",
-        "find . -name x -exec rm {} \\;",  # exec is a word: never read-only
+        # the review's rows (2026-10-25)
+        "ls & rm -rf /tmp/x",  # a lone & backgrounds the first command and runs the second
+        "sed -i '' s/a/b/ f.txt",  # sed is not in the list at all
+        "awk 'BEGIN{system(\"touch /tmp/p\")}'",  # nor awk
+        "sort -o out.txt in.txt",
+        "sort -ro out.txt in.txt",  # combined short flags
+        "uniq a b",  # the second file is the output
+        "find . -fprint out",
+        "find . -fls out",
+        "find . -name x -exec rm {} \\;",
+        "find . -delete",
+        "git diff --output=f",
+        "git log --output f",
+        "rg --pre 'sh' x",
+        "git branch -D main",
+        "git branch new-name",
+        "git remote set-url origin x",
+        "git remote add x y",
+        "uv run pytest",
+        "python3 -c \"__import__('os').remove('f')\"",
+        "xxd -r a b",
+        "sysctl -w a=b",
+        "date 1010",
+        "date -s now",
+        "gh pr view --web",
+        "tmux capture-pane -b x",
+        "ps 2>&1",
     ):
         assert not gate.read_only_bash(bad, allowed), bad
+
+
+def test_question_mode_is_lifted_by_the_keyboard_and_by_time(env: Any, tmp_path: Path) -> None:
+    """HIGH 2 of the review: a question must not keep blocking the owner's own terminal
+    work after a deferred, waiting or interrupted turn."""
+    from rh_friend.verify import handle as verify_handle
+    from rh_friend.verify import read_current, write_current
+
+    core, client, clock, _ = env
+    cfg = friend_cfg(core, tmp_path)
+    project = str(cfg.project_dir)
+    edit = {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/tmp/x", "old_string": "a", "new_string": "b"},
+    }
+    # A question is open (the reply was deferred, the agent asked, or the turn was cut short).
+    _note(cfg, "question")
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).blocked
+    # The owner types in the terminal: the mode is lifted, the message stays open.
+    out = verify_handle({"prompt": "also check the disk"}, cfg, project_dir=project)
+    assert out is not None and out["hookSpecificOutput"]["additionalContext"] == "[unsigned]"
+    note = read_current(cfg)
+    assert note is not None and note["id"] == "c" * 32 and note["kind"] == "task"
+    assert note["lifted_at"]
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
+    # A question older than the TTL sets no mode either.
+    from datetime import UTC, datetime, timedelta
+
+    write_current(
+        cfg,
+        id="d" * 32,
+        kind="question",
+        prompt_id=None,
+        at=datetime.now(UTC) - timedelta(seconds=cfg.gate.question_ttl_s + 1),  # type: ignore[union-attr]
+    )
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
+    write_current(cfg, id="d" * 32, kind="question", prompt_id=None, at=datetime.now(UTC))
+    assert gate.handle(edit, cfg, project_dir=project, now=clock).blocked
 
 
 def test_question_mode_routes_work_through_a_decision(env: Any, tmp_path: Path) -> None:
