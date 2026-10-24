@@ -30,11 +30,14 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from rh_common import __version__
 from rh_common.crypto import b64e, public_x963, sha256_hex, sign_der
 from rh_common.friend import (
+    MAX_TEXT,
     OP_DECIDE,
+    OP_MESSAGES,
     OP_QUESTIONS,
     OP_SEND,
     DeviceEntry,
     FriendDecision,
+    FriendMessage,
     Question,
     build_devices_doc,
     check_action,
@@ -71,7 +74,7 @@ from rh_core.data import DataSources, parse_ids
 from rh_core.journal import Journal
 from rh_core.pairing import Candidate, Pairing, Session
 from rh_core.peers import LocalPeers, PeerLookup
-from rh_core.store import DecisionRow, Store
+from rh_core.store import DecisionRow, MessageRow, Store
 from rh_core.system import PsutilProbe, SystemProbe
 
 _DEVICE_RE = re.compile(r"\A[0-9a-f]{32}\Z")
@@ -370,6 +373,129 @@ class Core:
             "used_at": format_ts(self.clock()),
         }
 
+    # --- the owner's messages and the agent's replies (friend slice 3) -----------------
+
+    def record_message(
+        self, *, sid: str, device: str, message: FriendMessage, now: datetime
+    ) -> MessageRow:
+        """A new message from the owner: stored with its text, journaled as chat, and every
+        message the agent still owed an answer to is superseded by it (the bridge interrupts
+        the agent, so the previous turn ends without a reply)."""
+        row = self.store.add_message(
+            id=sid,
+            message_id=message.id,
+            device=device,
+            agent=self.agent,
+            kind=message.kind,
+            re=message.re,
+            text=message.text,
+            now=now,
+        )
+        self.journal.append(
+            "chat.message",
+            author="owner",
+            agent=self.agent,
+            device=device,
+            id=sid,
+            kind=message.kind,
+            re=message.re,
+            text=message.text,
+        )
+        for previous in self.store.supersede_open(by=sid, now=now):
+            self.journal.append("friend.message.superseded", agent=self.agent, id=previous, by=sid)
+        return row
+
+    def message_received(self, message_id: str, *, prompt_id: str | None) -> dict[str, Any]:
+        """The agent-side verifier delivered the message to the session."""
+        now = self.clock()
+        row = self.store.set_message_state(
+            message_id,
+            "received",
+            now=now,
+            from_states=("accepted",),
+            prompt_id=prompt_id,
+            received_at=format_ts(now),
+        )
+        if row is None:
+            return self._message_refused(message_id)
+        self.journal.append(
+            "friend.message.received", agent=self.agent, id=message_id, prompt_id=prompt_id
+        )
+        return {"ok": True, **row.to_api()}
+
+    def message_rejected(self, message_id: str, *, code: str, detail: str) -> dict[str, Any]:
+        """The agent-side verifier blocked the message (its reason is the code)."""
+        row = self.store.set_message_state(
+            message_id,
+            "rejected",
+            now=self.clock(),
+            from_states=("accepted", "received"),
+            reject_code=code,
+        )
+        if row is None:
+            return self._message_refused(message_id)
+        self.journal.append(
+            "friend.message.rejected",
+            agent=self.agent,
+            id=message_id,
+            reason=code,
+            detail=detail[:200],
+        )
+        return {"ok": True, **row.to_api()}
+
+    def reply(
+        self, message_id: str, *, text: str, prompt_id: str | None, progress: bool
+    ) -> dict[str, Any]:
+        """The agent's reply to a message. The final reply of a turn (`progress` false)
+        answers the message, unless the agent asked the owner a question since the message
+        arrived: then the message waits for the decision and the reply is kept as progress.
+        With `[channel] match_prompt_id`, the reply must name the prompt the verifier
+        recorded for the message."""
+        if not isinstance(text, str) or not text.strip():
+            return _refused("bad_request", "text must be a non-empty string")
+        text = text[:MAX_TEXT]
+        row = self.store.message(message_id)
+        if row is None:
+            return _refused("not_found", f"no message {message_id}")
+        if row.state not in ("accepted", "received", "waiting"):
+            return _refused("closed", f"message {message_id} is {row.state}")
+        if (
+            self.config.ch.match_prompt_id
+            and row.prompt_id is not None
+            and prompt_id != row.prompt_id
+        ):
+            self.journal.append(
+                "friend.reply.unmatched",
+                agent=self.agent,
+                id=message_id,
+                prompt_id=prompt_id,
+                expected=row.prompt_id,
+            )
+            return _refused("prompt_mismatch", "the reply names another prompt than the message")
+        now = self.clock()
+        since = row.received_at or row.accepted_at
+        waiting = any(q.asked_at >= since for q in self.store.open_questions())
+        if progress:
+            kind, state, event = "progress", None, "friend.message.progress"
+        elif waiting:
+            kind, state, event = "progress", "waiting", "friend.message.waiting"
+        else:
+            kind, state, event = "final", "answered", "friend.message.answered"
+        updated = self.store.add_reply(message_id, kind=kind, text=text, now=now, state=state)
+        if updated is None:
+            return _refused("not_found", f"no message {message_id}")
+        self.journal.append(
+            "chat.message", author=self.agent, agent=self.agent, id=message_id, kind=kind, text=text
+        )
+        self.journal.append(event, agent=self.agent, id=message_id)
+        return {"ok": True, **updated.to_api()}
+
+    def _message_refused(self, message_id: str) -> dict[str, Any]:
+        row = self.store.message(message_id)
+        if row is None:
+            return _refused("not_found", f"no message {message_id}")
+        return _refused("closed", f"message {message_id} is {row.state}")
+
     def replaced_by(self, req: PairRequest) -> list[str]:
         """Devices one `y` revokes (SPEC §4.2): `replaces`, else active ones with the same name."""
         active = [
@@ -553,6 +679,49 @@ async def friend_questions(core: Core, verdict: Verdict, body: bytes) -> tuple[i
     }
 
 
+async def friend_messages(
+    core: Core, verdict: Verdict, q: MessagesQuery
+) -> tuple[int, dict[str, Any]]:
+    """friend.messages: the owner's messages changed after `since`, with their state and the
+    agent's replies, oldest change first."""
+    rows, more = await anyio.to_thread.run_sync(
+        lambda: core.store.messages_since(q.since, limit=q.limit)
+    )
+    return 200, {
+        "messages": [m.to_api() for m in rows],
+        "next": rows[-1].seq if rows else q.since,
+        "more": more,
+        "server_time": format_ts(core.clock()),
+    }
+
+
+@dataclass(frozen=True)
+class MessagesQuery:
+    since: int = 0
+    limit: int = 50
+
+
+MESSAGES_MAX_LIMIT = 200
+
+
+def parse_messages_query(doc: Any) -> MessagesQuery:
+    """Validate a friend.messages body; ValueError with the reason if it does not fit."""
+    if not isinstance(doc, dict):
+        raise ValueError("body must be a JSON object")
+    unknown = set(doc) - {"since", "limit"}
+    if unknown:
+        raise ValueError(f"unknown keys: {sorted(unknown)}")
+    since = doc.get("since", 0)
+    if isinstance(since, bool) or not isinstance(since, int) or since < 0:
+        raise ValueError("since must be an integer >= 0 (the `next` of the previous answer)")
+    limit = doc.get("limit", 50)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ValueError(f"limit must be an integer 1..{MESSAGES_MAX_LIMIT}")
+    if not 1 <= limit <= MESSAGES_MAX_LIMIT:
+        raise ValueError(f"limit must be an integer 1..{MESSAGES_MAX_LIMIT}")
+    return MessagesQuery(since=since, limit=limit)
+
+
 def _refused(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": code, "message": message}
 
@@ -578,7 +747,24 @@ async def friend_send(request: Request) -> Response:
     if verdict.error is not None or verdict.device is None:
         error = verdict.error or ProtocolError("malformed_auth", "bad friend.send")
         return core.refuse(error, nonce)
+    earlier = core.store.find_message(device=verdict.device.id, message_id=message.id)
+    if earlier is not None:
+        # The phone sends the same id again when it lost the first answer: one message,
+        # not two; the answer it missed, not a second envelope.
+        core.journal.append(
+            "friend.message.retry", agent=core.agent, device=verdict.device.id, id=earlier.id
+        )
+        return core.signed(
+            200,
+            {
+                "id": earlier.id,
+                "message_id": earlier.message_id,
+                "accepted_at": earlier.accepted_at,
+            },
+            nonce,
+        )
     sid = spool_id(nonce)
+    now = core.clock()
     envelope = envelope_from_headers(request.headers, body)
     _write_public(core.config.inbox_dir / f"{sid}.json", envelope.to_json())
     core.journal.append(
@@ -587,10 +773,12 @@ async def friend_send(request: Request) -> Response:
         device=verdict.device.id,
         id=sid,
         message_id=message.id,
+        kind=message.kind,
         body_sha256=sha256_hex(body),
     )
+    row = core.record_message(sid=sid, device=verdict.device.id, message=message, now=now)
     return core.signed(
-        200, {"id": sid, "message_id": message.id, "accepted_at": format_ts(core.clock())}, nonce
+        200, {"id": sid, "message_id": message.id, "accepted_at": row.accepted_at}, nonce
     )
 
 
@@ -949,6 +1137,13 @@ def create_app(
             methods=["GET"],
         ),
         Route("/v1/friend/decide", friend_decide, methods=["POST"]),
+        Route(
+            "/v1/friend/messages",
+            signed_endpoint(
+                OP_MESSAGES, "normal", friend_messages, _json_body(parse_messages_query)
+            ),
+            methods=["POST"],
+        ),
         WebSocketRoute("/v1/ws", ws_open),
     ]
     app = Starlette(routes=routes, lifespan=lifespan)

@@ -73,7 +73,8 @@ def kind_of(record: dict[str, Any], *, include_reads: bool = False) -> str | Non
         return "approval"
     if event.startswith("chat."):
         return "chat"
-    # friend.message stays kind system: the chat filter is the RemoteHands chat (stage 3).
+    # friend.message.* (receipts, state changes) stay kind system; the texts themselves are
+    # chat.message records, kind chat.
     if event.startswith("friend.question") or event.startswith("friend.decision"):
         return "approval"  # the owner's decisions for the channel agent, like approvals
     if result in ("rejected", "error", "failed"):
@@ -133,8 +134,37 @@ def render(record: dict[str, Any], names: Names) -> tuple[str, str | None]:
         by = record.get("by")
         by_text = "from the terminal" if by == "terminal" else f"by {name(by)}"
         return f"Revoked {name(record.get('device'))}", by_text
+    if event == "chat.message":
+        # One entry per message, title = author (the contract: "owner" or the agent's id),
+        # detail = the text. Older seeds without an author keep the event name.
+        author = record.get("author")
+        text = _text(record.get("text"))
+        if author == "owner":
+            return f"owner → {who}", text
+        if isinstance(author, str) and author:
+            return f"{author} → owner", text
+        return event, text
     if event == "friend.message":
         return f"Message to {who} from {name(record.get('device'))}", None
+    if event == "friend.message.retry":
+        return f"Message to {who} sent again", f"message {_short(record.get('id'))}"
+    if event == "friend.message.received":
+        return f"{who} received the message", f"message {_short(record.get('id'))}"
+    if event == "friend.message.rejected":
+        return f"{who} did not accept the message: {reason}", f"message {_short(record.get('id'))}"
+    if event == "friend.message.superseded":
+        return (
+            f"Message to {who} replaced by a newer one",
+            f"message {_short(record.get('id'))}, by {_short(record.get('by'))}",
+        )
+    if event == "friend.message.waiting":
+        return f"{who} is waiting for a decision", f"message {_short(record.get('id'))}"
+    if event == "friend.message.progress":
+        return f"{who} reported progress", f"message {_short(record.get('id'))}"
+    if event == "friend.message.answered":
+        return f"{who} answered", f"message {_short(record.get('id'))}"
+    if event == "friend.reply.unmatched":
+        return f"{who}'s reply names another prompt", f"message {_short(record.get('id'))}"
     if event == "friend.question":
         return f"{who} asks for a decision", f"question {_short(record.get('id'))}"
     if event == "friend.question.withdrawn":

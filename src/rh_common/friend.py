@@ -31,6 +31,7 @@ from rh_common.protocol import HEADER_AUTH, HEADER_SIG, format_ts
 OP_SEND = "friend.send"
 OP_DECIDE = "friend.decide"
 OP_QUESTIONS = "friend.questions"
+OP_MESSAGES = "friend.messages"
 
 MAX_TEXT = 8000  # characters; the message goes into the agent session's context
 MAX_ACTION = 65536  # characters of canonical JSON naming the exact tool call
@@ -38,6 +39,8 @@ DECISIONS = ("allow", "deny")
 # allow needs a fresh Face ID (critical); deny is signed like any message (normal).
 KEY_FOR_DECISION: dict[str, str] = {"allow": "critical", "deny": "normal"}
 AGENT_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{1,32}\Z")
+KINDS = ("question", "task")  # what the owner asks for; question is the default
+DEFAULT_KIND = "question"
 _MSG_ID_RE = re.compile(r"\A[A-Za-z0-9-]{1,64}\Z")
 _SPOOL_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 _SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -52,6 +55,8 @@ class FriendMessage:
     to: str
     id: str
     text: str
+    kind: str = DEFAULT_KIND  # question | task
+    re: str | None = None  # spool id of the message this one follows up (e.g. "make it a task")
 
 
 def check_agent_id(agent: Any) -> str:
@@ -62,14 +67,16 @@ def check_agent_id(agent: Any) -> str:
 
 
 def parse_body(body: bytes, agent: str) -> FriendMessage:
-    """{"to": "<agent>", "id": "<1–64 of A-Za-z0-9->", "text": "<1–8000 characters>"};
-    nothing else. `to` must be exactly the channel agent's id."""
+    """{"to": "<agent>", "id": "<1–64 of A-Za-z0-9->", "text": "<1–8000 characters>"} plus the
+    optional "kind": "question" | "task" (default question) and "re": "<spool id>" (the
+    message this one follows up); nothing else. `to` must be exactly the channel agent's id."""
     try:
         doc = json.loads(body)
     except (ValueError, UnicodeDecodeError) as e:
         raise ValueError("body is not JSON") from e
-    if not isinstance(doc, dict) or set(doc) != {"to", "id", "text"}:
-        raise ValueError("body must have exactly to, id, text")
+    required, optional = {"to", "id", "text"}, {"kind", "re"}
+    if not isinstance(doc, dict) or not required <= set(doc) <= required | optional:
+        raise ValueError("body must have to, id, text and at most kind, re")
     to, msg_id, text = doc["to"], doc["id"], doc["text"]
     if to != agent:
         raise ValueError(f'to must be "{agent}", the channel agent')
@@ -79,7 +86,13 @@ def parse_body(body: bytes, agent: str) -> FriendMessage:
         raise ValueError("text must be a non-empty string")
     if len(text) > MAX_TEXT:
         raise ValueError(f"text is longer than {MAX_TEXT} characters")
-    return FriendMessage(to=to, id=msg_id, text=text)
+    kind = doc.get("kind", DEFAULT_KIND)
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {list(KINDS)}")
+    re_ = doc.get("re")
+    if re_ is not None and (not isinstance(re_, str) or not _SPOOL_ID_RE.match(re_)):
+        raise ValueError("re must be the spool id of an earlier message, 32 lowercase hex")
+    return FriendMessage(to=to, id=msg_id, text=text, kind=kind, re=re_)
 
 
 # --- questions and decisions ------------------------------------------------------
@@ -306,10 +319,13 @@ def read_devices_doc(data: bytes, *, core_pub: bytes) -> dict[str, DeviceEntry]:
 __all__ = [
     "AGENT_ID_RE",
     "DECISIONS",
+    "DEFAULT_KIND",
+    "KINDS",
     "KEY_FOR_DECISION",
     "MAX_ACTION",
     "MAX_TEXT",
     "OP_DECIDE",
+    "OP_MESSAGES",
     "OP_QUESTIONS",
     "OP_SEND",
     "POINTER_RE",

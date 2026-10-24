@@ -12,12 +12,21 @@ JSON Lines both ways. Each connection sends one command:
     {"cmd": "friend.question.withdraw", "id": "<question id>"}
     {"cmd": "friend.decision.use", "id": "<decision id>", "action": "<as asked>",
      "question_sha256": "<sha256 of the question text>"}
+    {"cmd": "friend.received", "id": "<message id>", "prompt_id": "<Claude Code prompt id>"}
+    {"cmd": "friend.rejected", "id": "<message id>", "code": "<why>", "detail": "<text>"}
+    {"cmd": "friend.reply", "in_reply_to": "<message id>", "text": "<the agent's reply>",
+     "prompt_id": "<as received>", "progress": false}
 
 `friend.*` is how the agent-side gate (rh-friend-gate, rh-friend-ask) talks to the core:
 a question goes to the phone through friend.questions; a signed friend.decide
 answers it; `friend.decision.use` spends an allow decision for exactly that
 action once (the first caller wins, every later one is refused). The gate has
 already checked the phone's signature itself; the socket only keeps the count.
+
+`friend.received` / `friend.rejected` are the verifier's receipts for an owner's message
+and `friend.reply` is the Stop hook's (or the agent's own) answer to it: the core keeps the
+state the phone shows under each message (friend.messages). They are facts the agent side
+reports, not permissions; a missing or late report leaves the message where it was.
 
 `pair.start` is a conversation. The core answers with
 `{"event": "pair.code", "string", "expires"}`, then, when a phone's /v1/pair
@@ -191,6 +200,50 @@ async def _dispatch(
                 writer,
                 core.use_decision(
                     str(decision_id), action=str(action), question_sha256_=str(digest)
+                ),
+            )
+    elif cmd == "friend.received":
+        message_id, prompt_id = msg.get("id"), msg.get("prompt_id")
+        if not isinstance(message_id, str) or not message_id:
+            await _send(writer, {"ok": False, "error": "bad_request", "message": "id"})
+        else:
+            await _send(
+                writer,
+                core.message_received(
+                    message_id, prompt_id=prompt_id if isinstance(prompt_id, str) else None
+                ),
+            )
+    elif cmd == "friend.rejected":
+        message_id, code = msg.get("id"), msg.get("code")
+        if not all(isinstance(v, str) and v for v in (message_id, code)):
+            await _send(writer, {"ok": False, "error": "bad_request", "message": "id, code"})
+        else:
+            await _send(
+                writer,
+                core.message_rejected(
+                    str(message_id), code=str(code), detail=str(msg.get("detail") or "")
+                ),
+            )
+    elif cmd == "friend.reply":
+        message_id, text, prompt_id = msg.get("in_reply_to"), msg.get("text"), msg.get("prompt_id")
+        progress = msg.get("progress", False)
+        if (
+            not isinstance(message_id, str)
+            or not message_id
+            or not isinstance(text, str)
+            or not isinstance(progress, bool)
+        ):
+            await _send(
+                writer, {"ok": False, "error": "bad_request", "message": "in_reply_to, text"}
+            )
+        else:
+            await _send(
+                writer,
+                core.reply(
+                    message_id,
+                    text=text,
+                    prompt_id=prompt_id if isinstance(prompt_id, str) else None,
+                    progress=progress,
                 ),
             )
     else:

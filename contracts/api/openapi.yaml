@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RemoteHands core API
-  version: 0.5.0
+  version: 0.6.0
   description: |
     HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
     signing scheme below applies to every operation unless it says otherwise.
@@ -407,8 +407,9 @@ paths:
                      pairing, device revoked (later: action calls, registrations,
                      page changes, chat stop / reset)
           approvals  kind approval (stage 4)
-          chat       kind chat (stage 3): one entry per message, title = author
-                     ("owner" or "RemoteHands"), detail = text
+          chat       kind chat: one entry per message between the owner and the
+                     channel agent (friend.send and the agent's replies), title =
+                     "owner → <agent>" or "<agent> → owner", detail = text
           errors     kind error: rejected requests, rejected pairing, failures
 
         Kind system (core started / stopped and the like) shows only under all.
@@ -517,9 +518,23 @@ paths:
         exports, signed by the core key. Nothing on the way can turn a message into a
         verified one. Vectors: vectors/friend.json.
 
-        The body is JSON {"id","text","to"}: `to` is status.channel.agent, `id` is the phone's
-        message id (1–64 of A-Z a-z 0-9 -), `text` has 1–8000 characters. A body that does not
-        fit is refused with bad_request.
+        The body is JSON {"id","text","to"} plus the optional "kind" and "re": `to` is
+        status.channel.agent, `id` is the phone's message id (1–64 of A-Z a-z 0-9 -),
+        `text` has 1–8000 characters, `kind` is question (default) or task, `re` is the
+        spool id of an earlier message this one follows up ("make it a task"). A body
+        that does not fit is refused with bad_request.
+
+        kind: a question asks for an answer in text; the agent-side gate lets a question
+        use read-only tools freely and routes anything else through a signed decision
+        (friend.questions / friend.decide). A task lets the agent work; only the
+        protected actions of the gate need a decision. The kind is signed with the body
+        and shown to the agent in the verified label.
+
+        The core keeps every accepted message with its text and state (friend.messages).
+        A new message supersedes every earlier one the agent still owed an answer to: the
+        bridge interrupts the agent, so the previous turn ends without a reply. Sending
+        the same `id` again from the same device (a retry after a lost answer) returns
+        the first message's answer and creates nothing.
       x-rh-op: friend.send
       x-rh-key: normal
       requestBody:
@@ -534,6 +549,8 @@ paths:
                 id: {type: string, pattern: "^[A-Za-z0-9-]{1,64}$"}
                 text: {type: string, minLength: 1, maxLength: 8000}
                 to: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$", description: "The channel agent's id, as status.channel.agent; any other value is bad_request"}
+                kind: {enum: [question, task], default: question}
+                re: {type: string, pattern: "^[0-9a-f]{32}$", description: Spool id of the message this one follows up}
             example: {id: m-1, text: "check the build", to: Agent-Alpha}
       responses:
         "200":
@@ -553,6 +570,81 @@ paths:
                 id: 2f6c0d1e4b5a6f708192837465564700
                 message_id: m-1
                 accepted_at: "2026-10-23T03:12:05Z"
+        "400": {$ref: "#/components/responses/Rejected"}
+        "401": {$ref: "#/components/responses/Rejected"}
+        "403": {$ref: "#/components/responses/Rejected"}
+  /v1/friend/messages:
+    post:
+      operationId: friend.messages
+      summary: The owner's messages with their state and the agent's replies
+      description: |
+        What the phone shows under each message it sent, from the core, which is the
+        source of truth: the app can be closed or offline and catch up later. Every
+        change to a message (a receipt, a reply, a new state) gives it a new `seq`;
+        `since` is the `next` of the previous answer (0 for everything, with `limit`
+        and `more` for paging), and the answer lists the messages changed after it,
+        oldest change first, each with all its replies.
+
+        States, in the order they happen: accepted (the core has it), received (the
+        agent-side verifier delivered it to the session), waiting (the agent asked the
+        owner a decision since; the reply so far is progress), answered (the agent's
+        final reply is in `replies`). Terminal without an answer: rejected (the
+        verifier blocked it, `reject_code` says why), superseded (a newer message from
+        the owner replaced it, `superseded_by`). A session that stops never moves a
+        message by itself: it stays received, and agents.status shows the agent is not
+        running. The owner's texts and the agent's replies are also chat entries in the
+        Log (log.list, filter chat).
+      x-rh-op: friend.messages
+      x-rh-key: normal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                since: {type: integer, minimum: 0, default: 0, description: "`next` of the previous answer"}
+                limit: {type: integer, minimum: 1, maximum: 200, default: 50}
+            example: {since: 0, limit: 50}
+      responses:
+        "200":
+          description: Messages changed after `since`
+          headers: {X-RH-Server-Sig: {$ref: "#/components/headers/ServerSig"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [messages, next, more, server_time]
+                properties:
+                  messages:
+                    type: array
+                    items: {$ref: "#/components/schemas/FriendMessage"}
+                  next: {type: integer, minimum: 0, description: "`since` for the next call; unchanged when nothing changed"}
+                  more: {type: boolean, description: More changed messages follow (call again with next)}
+                  server_time: {$ref: "#/components/schemas/Timestamp"}
+              example:
+                messages:
+                  - id: 2f6c0d1e4b5a6f708192837465564700
+                    seq: 7
+                    message_id: m-1
+                    device: 3f2a9c0d1e4b5a6f7081928374655647
+                    agent: Agent-Alpha
+                    kind: question
+                    text: "Is there a reason the RAM is so full right now?"
+                    accepted_at: "2026-10-25T09:12:05Z"
+                    state: answered
+                    received_at: "2026-10-25T09:12:07Z"
+                    closed_at: "2026-10-25T09:12:41Z"
+                    replies:
+                      - seq: 6
+                        kind: final
+                        text: "Xcode holds 9 GB after the last build; nothing else is unusual. Want me to quit it?"
+                        at: "2026-10-25T09:12:41Z"
+                next: 7
+                more: false
+                server_time: "2026-10-25T09:13:00Z"
         "400": {$ref: "#/components/responses/Rejected"}
         "401": {$ref: "#/components/responses/Rejected"}
         "403": {$ref: "#/components/responses/Rejected"}
@@ -781,6 +873,38 @@ components:
       properties:
         agent: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$"}
         title: {type: string, minLength: 1, description: "Shown in Chat and on question cards; today the same as agent (the team file lists ids)"}
+    FriendMessage:
+      type: object
+      additionalProperties: false
+      required: [id, seq, message_id, device, agent, kind, text, accepted_at, state, replies]
+      description: An owner's message as the phone shows it, with its state and replies
+      properties:
+        id: {type: string, pattern: "^[0-9a-f]{32}$", description: spool id, as friend.send answered}
+        seq: {type: integer, minimum: 1, description: Changes on every update; the cursor of friend.messages}
+        message_id: {type: string, pattern: "^[A-Za-z0-9-]{1,64}$", description: The phone's id}
+        device: {$ref: "#/components/schemas/DeviceId"}
+        agent: {type: string, pattern: "^[A-Za-z0-9_-]{1,32}$", description: The channel agent it went to}
+        kind: {enum: [question, task]}
+        re: {type: string, pattern: "^[0-9a-f]{32}$", description: The message this one followed up}
+        text: {type: string, minLength: 1, maxLength: 8000}
+        accepted_at: {$ref: "#/components/schemas/Timestamp"}
+        state: {enum: [accepted, received, waiting, answered, rejected, superseded]}
+        received_at: {$ref: "#/components/schemas/Timestamp"}
+        closed_at: {$ref: "#/components/schemas/Timestamp"}
+        reject_code: {type: string, description: "Why the verifier blocked it (state rejected)"}
+        superseded_by: {type: string, pattern: "^[0-9a-f]{32}$", description: The newer message (state superseded)}
+        replies:
+          type: array
+          items: {$ref: "#/components/schemas/FriendReply"}
+    FriendReply:
+      type: object
+      additionalProperties: false
+      required: [seq, kind, text, at]
+      properties:
+        seq: {type: integer, minimum: 1}
+        kind: {enum: [progress, final], description: final answers the message; progress is on the way (or the turn ended with a question to the owner)}
+        text: {type: string, minLength: 1, maxLength: 8000}
+        at: {$ref: "#/components/schemas/Timestamp"}
     FriendQuestion:
       type: object
       additionalProperties: false

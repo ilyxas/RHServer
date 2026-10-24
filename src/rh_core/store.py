@@ -1,5 +1,5 @@
 """SQLite registry of rh-core: devices, nonces (SPEC §5.1), the channel agent's questions and
-decisions (friend slice 2).
+decisions (friend slice 2), the owner's messages and the agent's replies (friend slice 3).
 
 Later stages add tables (action_id, data_id, approvals, quick access) as new
 migrations; existing ones are never edited.
@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from rh_common.crypto import b64e
 from rh_common.friend import Question
@@ -85,7 +86,47 @@ MIGRATIONS: list[str] = [
         since TEXT NOT NULL
     )
     """,
+    # friend slice 3: the owner's messages with their state (what the phone shows under each
+    # one) and the agent's replies. `seq` is one counter for both tables: a message takes a
+    # new seq on every change, so `friend.messages {since}` returns what changed after it.
+    """
+    CREATE TABLE friend_seq (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        value INTEGER NOT NULL
+    );
+    INSERT INTO friend_seq (id, value) VALUES (1, 0);
+    CREATE TABLE friend_messages (
+        id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        message_id TEXT NOT NULL,
+        device TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('question', 'task')),
+        re TEXT,
+        text TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('accepted', 'received', 'waiting', 'answered',
+                                             'rejected', 'superseded')),
+        prompt_id TEXT,
+        received_at TEXT,
+        closed_at TEXT,
+        reject_code TEXT,
+        superseded_by TEXT
+    );
+    CREATE UNIQUE INDEX friend_messages_device_message ON friend_messages (device, message_id);
+    CREATE INDEX friend_messages_seq ON friend_messages (seq);
+    CREATE TABLE friend_replies (
+        seq INTEGER PRIMARY KEY,
+        message_id TEXT NOT NULL REFERENCES friend_messages (id),
+        kind TEXT NOT NULL CHECK (kind IN ('progress', 'final')),
+        text TEXT NOT NULL,
+        at TEXT NOT NULL
+    );
+    CREATE INDEX friend_replies_message ON friend_replies (message_id, seq)
+    """,
 ]
+
+OPEN_STATES = ("accepted", "received", "waiting")  # the agent still owes an answer
 
 
 @dataclass(frozen=True)
@@ -96,6 +137,59 @@ class ChannelChange:
     agent: str
     withdrawn: list[str]  # question ids
     voided: list[str]  # decision ids
+
+
+@dataclass(frozen=True)
+class ReplyRow:
+    seq: int
+    message_id: str  # spool id of the owner's message
+    kind: str  # progress | final
+    text: str
+    at: str
+
+    def to_api(self) -> dict[str, Any]:
+        return {"seq": self.seq, "kind": self.kind, "text": self.text, "at": self.at}
+
+
+@dataclass(frozen=True)
+class MessageRow:
+    """The owner's message as the phone sees it: state plus the agent's replies."""
+
+    id: str  # spool id
+    seq: int  # bumped on every change
+    message_id: str  # the phone's id
+    device: str
+    agent: str
+    kind: str  # question | task
+    re: str | None
+    text: str
+    accepted_at: str
+    state: str  # accepted | received | waiting | answered | rejected | superseded
+    prompt_id: str | None = None
+    received_at: str | None = None
+    closed_at: str | None = None
+    reject_code: str | None = None
+    superseded_by: str | None = None
+    replies: tuple[ReplyRow, ...] = ()
+
+    def to_api(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "id": self.id,
+            "seq": self.seq,
+            "message_id": self.message_id,
+            "device": self.device,
+            "agent": self.agent,
+            "kind": self.kind,
+            "text": self.text,
+            "accepted_at": self.accepted_at,
+            "state": self.state,
+            "replies": [r.to_api() for r in self.replies],
+        }
+        for key in ("re", "received_at", "closed_at", "reject_code", "superseded_by"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
+        return out
 
 
 @dataclass(frozen=True)
@@ -471,6 +565,196 @@ class Store:
                     decision.agent,
                 ),
             )
+
+    # --- the owner's messages and the agent's replies (friend slice 3) -----------------
+
+    def _next_seq(self, db: sqlite3.Connection) -> int:
+        db.execute("UPDATE friend_seq SET value = value + 1 WHERE id = 1")
+        row = db.execute("SELECT value FROM friend_seq WHERE id = 1").fetchone()
+        return int(row["value"])
+
+    def last_seq(self) -> int:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM friend_seq WHERE id = 1").fetchone()
+        return int(row["value"]) if row else 0
+
+    def add_message(
+        self,
+        *,
+        id: str,
+        message_id: str,
+        device: str,
+        agent: str,
+        kind: str,
+        re: str | None,
+        text: str,
+        now: datetime,
+    ) -> MessageRow:
+        with self._tx() as db:
+            seq = self._next_seq(db)
+            db.execute(
+                "INSERT INTO friend_messages (id, seq, message_id, device, agent, kind, re, text,"
+                " accepted_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted')",
+                (id, seq, message_id, device, agent, kind, re, text, format_ts(now)),
+            )
+        found = self.message(id)
+        assert found is not None
+        return found
+
+    def find_message(self, *, device: str, message_id: str) -> MessageRow | None:
+        """The message a device sent under this id, if any (a retry sends the same id)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT id FROM friend_messages WHERE device = ? AND message_id = ?",
+                (device, message_id),
+            ).fetchone()
+        return self.message(str(row["id"])) if row else None
+
+    def message(self, message_id: str) -> MessageRow | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM friend_messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            replies = self._db.execute(
+                "SELECT * FROM friend_replies WHERE message_id = ? ORDER BY seq", (message_id,)
+            ).fetchall()
+        return _message(row, replies)
+
+    def set_message_state(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        now: datetime,
+        from_states: tuple[str, ...],
+        **fields: Any,
+    ) -> MessageRow | None:
+        """Move a message to `state` if it is in one of `from_states`; None if it is not
+        (the caller reports the current state). Extra fields are columns to set."""
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT state FROM friend_messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if row is None or row["state"] not in from_states:
+                return None
+            fields["state"] = state
+            fields["seq"] = self._next_seq(db)
+            if state in ("answered", "rejected", "superseded"):
+                fields.setdefault("closed_at", format_ts(now))
+            assignments = ", ".join(f"{key} = ?" for key in fields)
+            db.execute(
+                f"UPDATE friend_messages SET {assignments} WHERE id = ?",  # noqa: S608
+                (*fields.values(), message_id),
+            )
+        return self.message(message_id)
+
+    def add_reply(
+        self, message_id: str, *, kind: str, text: str, now: datetime, state: str | None
+    ) -> MessageRow | None:
+        """Record a reply and, when `state` is given, move the message there in the same
+        transaction. None if there is no such message."""
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT state FROM friend_messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            stamp = format_ts(now)
+            db.execute(
+                "INSERT INTO friend_replies (seq, message_id, kind, text, at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (self._next_seq(db), message_id, kind, text, stamp),
+            )
+            fields: dict[str, Any] = {"seq": self._next_seq(db)}
+            if state is not None:
+                fields["state"] = state
+                if state == "answered":
+                    fields["closed_at"] = stamp
+            assignments = ", ".join(f"{key} = ?" for key in fields)
+            db.execute(
+                f"UPDATE friend_messages SET {assignments} WHERE id = ?",  # noqa: S608
+                (*fields.values(), message_id),
+            )
+        return self.message(message_id)
+
+    def supersede_open(self, *, by: str, now: datetime) -> list[str]:
+        """Every message the agent still owes an answer to, other than `by`, is superseded
+        by it (a new message from the owner interrupts the previous one). Returns the ids."""
+        with self._tx() as db:
+            marks = ", ".join("?" for _ in OPEN_STATES)
+            rows = db.execute(
+                f"SELECT id FROM friend_messages WHERE state IN ({marks}) AND id != ?"  # noqa: S608
+                " ORDER BY seq",
+                (*OPEN_STATES, by),
+            ).fetchall()
+            ids = [str(r["id"]) for r in rows]
+            stamp = format_ts(now)
+            for message_id in ids:
+                db.execute(
+                    "UPDATE friend_messages SET state = 'superseded', superseded_by = ?,"
+                    " closed_at = ?, seq = ? WHERE id = ?",
+                    (by, stamp, self._next_seq(db), message_id),
+                )
+        return ids
+
+    def messages_since(self, since: int, *, limit: int) -> tuple[list[MessageRow], bool]:
+        """Messages changed after `since`, oldest change first, and whether more follow."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM friend_messages WHERE seq > ? ORDER BY seq LIMIT ?",
+                (since, limit + 1),
+            ).fetchall()
+            out = []
+            for row in rows[:limit]:
+                replies = self._db.execute(
+                    "SELECT * FROM friend_replies WHERE message_id = ? ORDER BY seq", (row["id"],)
+                ).fetchall()
+                out.append(_message(row, replies))
+        return out, len(rows) > limit
+
+    def open_messages(self) -> list[MessageRow]:
+        """Messages the agent still owes an answer to, oldest first."""
+        with self._lock:
+            marks = ", ".join("?" for _ in OPEN_STATES)
+            rows = self._db.execute(
+                f"SELECT id FROM friend_messages WHERE state IN ({marks})"  # noqa: S608
+                " ORDER BY accepted_at, seq",
+                OPEN_STATES,
+            ).fetchall()
+        found = [self.message(str(r["id"])) for r in rows]
+        return [m for m in found if m is not None]
+
+
+def _message(row: sqlite3.Row, replies: list[sqlite3.Row]) -> MessageRow:
+    return MessageRow(
+        id=row["id"],
+        seq=int(row["seq"]),
+        message_id=row["message_id"],
+        device=row["device"],
+        agent=row["agent"],
+        kind=row["kind"],
+        re=row["re"],
+        text=row["text"],
+        accepted_at=row["accepted_at"],
+        state=row["state"],
+        prompt_id=row["prompt_id"],
+        received_at=row["received_at"],
+        closed_at=row["closed_at"],
+        reject_code=row["reject_code"],
+        superseded_by=row["superseded_by"],
+        replies=tuple(
+            ReplyRow(
+                seq=int(r["seq"]),
+                message_id=r["message_id"],
+                kind=r["kind"],
+                text=r["text"],
+                at=r["at"],
+            )
+            for r in replies
+        ),
+    )
 
 
 def _question(row: sqlite3.Row) -> Question:

@@ -34,9 +34,20 @@ AGENT = "Agent-Alpha"  # the channel agent of every vector: `to` and `status.cha
 OTHER_AGENT = "Agent-Beta"  # a genuine message to another agent: wrong recipient
 
 
-def body(text: str = "Проверь сборку 🚀", *, to: str = AGENT, msg_id: str = "m-1") -> bytes:
-    """The phone's encoding: sorted keys, no spaces, UTF-8 as is."""
-    doc = {"id": msg_id, "text": text, "to": to}
+def body(
+    text: str = "Проверь сборку 🚀",
+    *,
+    to: str = AGENT,
+    msg_id: str = "m-1",
+    kind: str | None = None,
+    re: str | None = None,
+) -> bytes:
+    """The phone's encoding: sorted keys, no spaces, UTF-8 as is; kind and re only when set."""
+    doc: dict[str, Any] = {"id": msg_id, "text": text, "to": to}
+    if kind is not None:
+        doc["kind"] = kind
+    if re is not None:
+        doc["re"] = re
     return json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -67,6 +78,14 @@ def _deterministic_devices(signer: str = "core") -> bytes:
 def core_cases() -> list[tuple[str, tuple[dict[str, str], bytes], str | None]]:
     return [
         ("send-ok", t._signed(op=OP_SEND, body=body()), None),
+        ("send-kind-question", t._signed(op=OP_SEND, body=body(kind="question")), None),
+        (
+            "send-task-re",
+            t._signed(op=OP_SEND, body=body("продолжай как задачу", kind="task", re="a" * 32)),
+            None,
+        ),
+        ("send-kind-bad", t._signed(op=OP_SEND, body=body(kind="job")), "bad_request"),
+        ("send-re-bad", t._signed(op=OP_SEND, body=body(re="m-1")), "bad_request"),
         (
             "send-critical-key",
             t._signed(level="critical", op=OP_SEND, body=body()),
@@ -221,19 +240,27 @@ def evaluate_envelope(case: dict[str, Any], docs: dict[str, str]) -> str | None:
 
 def friend_vectors() -> dict[str, Any]:
     build = []
-    for name, text in (("ascii", "check the build"), ("unicode", "Проверь сборку 🚀")):
-        raw = body(text)
+    for name, text, kind, re in (
+        ("ascii", "check the build", None, None),
+        ("unicode", "Проверь сборку 🚀", None, None),
+        ("task", "fix the build", "task", None),
+        ("make-it-a-task", "go ahead", "task", "a" * 32),
+    ):
+        raw = body(text, kind=kind, re=re)
         headers, _ = t._signed(op=OP_SEND, body=raw)
-        build.append(
+        entry: dict[str, Any] = {"name": name, "id": "m-1", "text": text}
+        if kind is not None:
+            entry["kind"] = kind
+        if re is not None:
+            entry["re"] = re
+        entry.update(
             {
-                "name": name,
-                "id": "m-1",
-                "text": text,
                 "expected_body_b64": b64e(raw),
                 "expected_body_text": raw.decode("utf-8"),
                 "headers": headers,
             }
         )
+        build.append(entry)
     core = []
     for name, (headers, raw), code in core_cases():
         got = evaluate_core(headers, raw)
@@ -270,8 +297,9 @@ def friend_vectors() -> dict[str, Any]:
     return {
         "description": (
             "friend.send. build: the phone's body is JSON with sorted keys and no spaces, "
-            '{"id","text","to":<agent>}, signed with the normal key at POST /v1/friend; '
-            "`agent` is the channel agent (status.channel.agent). "
+            '{"id","text","to":<agent>} plus the optional "kind" (question | task, default '
+            'question) and "re" (spool id of the message it follows up), signed with the '
+            "normal key at POST /v1/friend; `agent` is the channel agent (status.channel.agent). "
             "core: requests against signed_requests.json fixture; accept spools the request "
             "as received under spool_id = first 32 hex of sha256(nonce). devices: the core's "
             'signed device list {"payload":"<JCS>","sig":"<core key over payload>"}. '
@@ -279,7 +307,7 @@ def friend_vectors() -> dict[str, Any]:
             f"⟦rh:<spool_id>⟧ at `now` with a {int(WINDOW.total_seconds())} s window "
             "and the listed nonces already seen."
         ),
-        "version": 2,
+        "version": 3,
         "agent": AGENT,
         "core_pub_x963_b64": b64e(t.pub("core")),
         "window_s": int(WINDOW.total_seconds()),
