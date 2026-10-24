@@ -66,6 +66,69 @@ SEEN_FILE = Path("state/rh_seen.jsonl")
 REJECTED_LOG = Path("log/rh_rejected.jsonl")
 BRIDGE_STATE_FILE = Path("state/rh_bridge.json")
 GATE_LOG = Path("log/rh_gate.jsonl")
+STATE_FILE = Path("state/rh_current.json")  # the owner's message the session is on
+DEFAULT_REPORT_TIMEOUT_S = 2.0
+# Question mode (the owner sent a question, not a task): these tools run freely, every
+# other call is treated as protected and goes through a decision or a task. WebFetch and
+# WebSearch are not here: a URL can carry data out; the owner adds them if wanted.
+DEFAULT_QUESTION_TOOLS = ("Read", "Glob", "Grep", "LS", "TodoWrite", "Task", "AskUserQuestion")
+# Read-only shell commands, by the first word(s) of every segment; gate.read_only_bash also
+# rejects the flags that make one of them write or run something. Short on purpose: every
+# entry was checked for a way to write, delete or execute; a longer list is a longer audit.
+DEFAULT_QUESTION_BASH = (
+    "ps",
+    "top",
+    "vm_stat",
+    "memory_pressure",
+    "df",
+    "du",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "rg",
+    "find",
+    "stat",
+    "file",
+    "uptime",
+    "who",
+    "whoami",
+    "id",
+    "date",
+    "uname",
+    "sw_vers",
+    "sysctl",
+    "lsof",
+    "netstat",
+    "ifconfig",
+    "pgrep",
+    "launchctl list",
+    "launchctl print",
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git remote",
+    "git rev-parse",
+    "gh pr view",
+    "gh pr list",
+    "gh pr checks",
+    "gh run list",
+    "tmux list-sessions",
+    "tmux list-windows",
+    "tmux capture-pane",
+    "echo",
+    "printf",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "jq",
+)
+DEFAULT_QUESTION_TTL_S = 1800  # a question older than this no longer sets the mode
 
 
 class ConfigError(ValueError):
@@ -77,6 +140,7 @@ class BridgeConfig:
     tmux: str
     target: str
     state_file: Path
+    interrupt: bool = True  # one Escape before the pointer: the owner's message interrupts
 
 
 @dataclass(frozen=True)
@@ -112,6 +176,10 @@ class GateConfig:
     decide_window_s: int = DEFAULT_DECIDE_WINDOW_S
     log: Path | None = None
     ask: Path | None = None  # rh-friend-ask; None: the one next to this interpreter
+    question_tools: tuple[str, ...] = DEFAULT_QUESTION_TOOLS
+    question_bash: tuple[str, ...] = DEFAULT_QUESTION_BASH
+    question_ttl_s: int = DEFAULT_QUESTION_TTL_S
+    report_timeout_s: float = DEFAULT_REPORT_TIMEOUT_S  # for the hooks' receipts and replies
 
 
 @dataclass(frozen=True)
@@ -129,6 +197,13 @@ class FriendConfig:
     gate: GateConfig | None = None
     require_protected: bool = False  # managed install: anchors not writable by the hook's user
     source: Path | None = None  # the file this config was read from
+    state_file: Path | None = None  # None: project_dir/state/rh_current.json
+
+    @property
+    def current_file(self) -> Path:
+        """Where the verifier notes the owner's message the session is on (id, kind,
+        prompt_id); the gate reads the kind, the Stop hook the id."""
+        return self.state_file or self.project_dir / STATE_FILE
 
 
 _TOP = {
@@ -144,6 +219,7 @@ _TOP = {
     "bridge",
     "gate",
     "require_protected",
+    "state_file",
 }
 _REQUIRED = ("agent", "project_dir", "inbox_dir", "devices_file", "core_key")
 
@@ -174,7 +250,7 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
     except ValueError as e:
         raise ConfigError(str(e)) from e
     project = path(doc["project_dir"])
-    for key in ("seen_file", "rejected_log"):
+    for key in ("seen_file", "rejected_log", "state_file"):
         if key in doc and (not isinstance(doc[key], str) or not doc[key]):
             raise ConfigError(f"{key} must be a path")
     try:
@@ -206,15 +282,19 @@ def from_dict(doc: dict[str, Any], *, base: Path = Path(".")) -> FriendConfig:
         bridge=_bridge(doc["bridge"], path, project) if "bridge" in doc else None,
         gate=_gate(doc["gate"], path, project) if "gate" in doc else None,
         require_protected=protected,
+        state_file=path(doc["state_file"]) if "state_file" in doc else None,
     )
 
 
 def _bridge(table: Any, path: Any, project: Path) -> BridgeConfig:
     if not isinstance(table, dict):
         raise ConfigError("[bridge] must be a table")
-    unknown = set(table) - {"tmux", "target", "state_file"}
+    unknown = set(table) - {"tmux", "target", "state_file", "interrupt"}
     if unknown:
         raise ConfigError(f"unknown [bridge] keys: {sorted(unknown)}")
+    interrupt = table.get("interrupt", True)
+    if not isinstance(interrupt, bool):
+        raise ConfigError("[bridge] interrupt must be true or false")
     if not isinstance(table.get("target"), str) or not table["target"]:
         raise ConfigError("[bridge] target is required")
     state = table.get("state_file")
@@ -227,15 +307,46 @@ def _bridge(table: Any, path: Any, project: Path) -> BridgeConfig:
         tmux=tmux,
         target=table["target"],
         state_file=path(state) if state else project / BRIDGE_STATE_FILE,
+        interrupt=interrupt,
     )
 
 
 def _gate(table: Any, path: Any, project: Path) -> GateConfig:
     if not isinstance(table, dict):
         raise ConfigError("[gate] must be a table")
-    unknown = set(table) - {"admin_socket", "decide_window_s", "log", "protected", "ask"}
+    unknown = set(table) - {
+        "admin_socket",
+        "decide_window_s",
+        "log",
+        "protected",
+        "ask",
+        "question_tools",
+        "question_bash",
+        "question_ttl_s",
+        "report_timeout_s",
+    }
     if unknown:
         raise ConfigError(f"unknown [gate] keys: {sorted(unknown)}")
+    lists: dict[str, tuple[str, ...]] = {}
+    for key, default in (
+        ("question_tools", DEFAULT_QUESTION_TOOLS),
+        ("question_bash", DEFAULT_QUESTION_BASH),
+    ):
+        value = table.get(key)
+        if value is None:
+            lists[key] = default
+            continue
+        if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+            raise ConfigError(f"[gate] {key} must be a list of non-empty strings")
+        lists[key] = tuple(value)
+    ttl = table.get("question_ttl_s", DEFAULT_QUESTION_TTL_S)
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl < 1:
+        raise ConfigError("[gate] question_ttl_s must be a positive integer (seconds)")
+    report_timeout = table.get("report_timeout_s", DEFAULT_REPORT_TIMEOUT_S)
+    if isinstance(report_timeout, bool) or not isinstance(report_timeout, int | float):
+        raise ConfigError("[gate] report_timeout_s must be a number of seconds")
+    if not 0 < float(report_timeout) <= 20:
+        raise ConfigError("[gate] report_timeout_s must be between 0 and 20 seconds")
     if not isinstance(table.get("admin_socket"), str) or not table["admin_socket"]:
         raise ConfigError("[gate] admin_socket is required")
     window = table.get("decide_window_s", DEFAULT_DECIDE_WINDOW_S)
@@ -256,6 +367,10 @@ def _gate(table: Any, path: Any, project: Path) -> GateConfig:
         log=path(log) if log else project / GATE_LOG,
         ask=path(ask) if ask else None,
         protected=tuple(_rule(r) for r in rules),
+        question_tools=lists["question_tools"],
+        question_bash=lists["question_bash"],
+        question_ttl_s=ttl,
+        report_timeout_s=float(report_timeout),
     )
 
 
@@ -335,7 +450,8 @@ DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
         "match": [
             r"((^|/)\.claude(/|$)|(^|/)CLAUDE\.md$|/LaunchAgents/|/LaunchDaemons/"
             r"|managed-settings|(^|/)friend\.toml$|(^|/)core\.toml$|(^|/)\.ssh(/|$)"
-            r"|authorized_keys|/sudoers|(^|/)settings(\.local)?\.json$)"
+            r"|authorized_keys|/sudoers|(^|/)settings(\.local)?\.json$"
+            r"|(^|/)rh_current\.json$|(^|/)rh_pending\.jsonl$)"
         ],
     },
     {
@@ -345,7 +461,7 @@ DEFAULT_PROTECTED: tuple[dict[str, Any], ...] = (
         "match": [
             r"(\.claude\b|CLAUDE\.md|LaunchAgents|LaunchDaemons|managed-settings"
             r"|friend\.toml|core\.toml|\.ssh\b|authorized_keys|sudoers"
-            r"|settings(\.local)?\.json)",
+            r"|settings(\.local)?\.json|rh_current\.json|rh_pending\.jsonl)",
             r"(>|\btee\b|\bsed\s+-i|\bcp\b|\bmv\b|\brm\b|\bln\b|\bchmod\b|\bchown\b"
             r"|\btruncate\b|\binstall\b|\bpatch\b"
             r"|\blaunchctl\s+(load|unload|bootstrap|bootout|enable|disable|kickstart)"

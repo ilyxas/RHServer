@@ -94,11 +94,61 @@ what it was: the owner's signature on the way in, the core's on the way out.
 | `friend.reply {in_reply_to, text, prompt_id, progress}` | the Stop hook (`rh-friend-reply`) with the turn's last assistant message; `--progress` by the agent itself | final: → `answered`, or → `waiting` when an open question was asked after the message arrived; progress: a reply, state unchanged |
 
 The `kind` the phone signs (`question`, default, or `task`) and `re` (the message a
-"make it a task" follows up) are stored and shown; the agent-side verifier labels the
-message with its kind and the gate enforces it (agent side, slice 3). `[channel]
-match_prompt_id = true` makes the core refuse a reply whose `prompt_id` is not the one the
-verifier recorded for the message; it stays off until the live check that Claude Code's
-Stop hook carries the same `prompt_id` as UserPromptSubmit.
+"make it a task" follows up) are stored and shown. `[channel] match_prompt_id = true`
+makes the core refuse a reply whose `prompt_id` is not the one the verifier recorded for
+the message; it stays off until the live check that Claude Code's Stop hook carries the
+same `prompt_id` as UserPromptSubmit.
+
+### Agent side: the note, the kind, the reply
+
+- **The note.** A verified `friend.send` leaves `state/rh_current.json` in the project:
+  `{"open": {"id", "kind", "prompt_id", "at"}}`, the owner's message the session is now
+  on. A `friend.decide` pointer does not touch it, so the turn after a decision still
+  answers the original message. The gate and the Stop hook read it; the rules protect it
+  (and `state/rh_pending.jsonl`) from the agent's own edits, as a seat belt.
+- **The label.** `[RH ✔ owner · <device> · <time> · question]` or `· task`, then one line
+  of hint for the model, then the text.
+- **Question mode** (the note says `question`): the gate lets `[gate] question_tools`
+  (Read, Glob, Grep, LS, TodoWrite, Task, AskUserQuestion; WebFetch and WebSearch are not
+  in the default because a URL can carry data out of the Mac, the owner adds them if
+  wanted) and read-only shell commands (`[gate] question_bash`: the first words of every
+  segment split at `|`, `||`, `&&`, `;` and newlines must be listed, e.g. `ps`, `vm_stat`,
+  `git log`; no `<`, `>`, `&>`, a lone `&`, backticks or `$(`; and per command the flags
+  that write or run something are refused: `sort -o`, a second file for `uniq`, `find
+  -exec/-ok/-delete/-fprint*/-fls`, `rg --pre`, `git … --output`, anything of `git branch`
+  but listing, anything of `git remote` but `-v`/`show`/`get-url`, `sysctl -w`, `date`
+  with a positional or `-s`, `gh … --web`, `tmux capture-pane -b`; `sed`, `awk`, `python`,
+  `uv run` are not in the list at all) through as they are. The mode is lifted when the
+  owner types into the session (an unsigned prompt turns the note into a task; the
+  message stays open, so the Stop hook still answers it) and expires after `[gate]
+  question_ttl_s` (30 min), so a deferred reply, a turn that ended with a question to
+  the owner, or an interrupted turn never leaves the terminal blocked. Every other call is protected under the rule
+  `question mode ⟦rh:<id>⟧`: blocked with a reason that names `rh-friend-ask`, so the
+  agent asks for exactly that call and the owner answers Allow or Deny on the phone, like
+  any protected action; or the agent answers in text and says the work needs a task; or
+  the owner sends `kind: task` ("Make it a task") and the mode is gone for everything
+  that follows. The `[[gate.protected]]` rules apply first in both modes. No note, a
+  closed one or an unreadable one is "no mode": the rules alone (fail open for the
+  convenience, fail closed for the rules). The lists are a convenience for the owner's
+  questions, not a sandbox: see "Known limitations".
+- **The note is best effort.** If it cannot be written, the message still reaches the
+  model; the failure goes to stderr and `log/rh_rejected.jsonl` (`note_not_written`), and
+  the previous note stays in force.
+- **Receipts.** After a successful check the verifier tells the core `friend.received`
+  (with Claude Code's `prompt_id`); when it blocks a pointer, `friend.rejected`. Both go
+  over `[gate] admin_socket` with `[gate] report_timeout_s` (2 s) and change no verdict
+  when the core does not answer. Without a `[gate]` table nothing is reported.
+- **The reply.** `rh-friend-reply` as the **Stop** hook sends the turn's
+  `last_assistant_message` as `friend.reply` for the open message; the core marks it
+  `answered` (the note is cleared) or `waiting` (the agent asked the owner since; the note
+  stays, the turn after the decision answers). A turn with no open message sends nothing,
+  and a turn Claude Code interrupted fires no Stop at all: that is why a new owner's
+  message supersedes the previous one in the core. `rh-friend-reply --progress "<text>"`
+  is the agent's own progress note mid-task. A core that does not answer gets the reply
+  from `state/rh_pending.jsonl` at the next hook call or `rh-friend-reply --flush`.
+- **The bridge** sends one `Escape` before each pointer (`[bridge] interrupt = true`): a
+  working agent stops its current step and keeps what it did, the owner's message is
+  next; idle, it is a no-op; a permission prompt is declined (decisions/007).
 
 ## Configuration
 
@@ -267,9 +317,21 @@ Prerequisites: the core and bridge LaunchAgents, RHServer installed into its ven
    ```
 
 4. Add the hooks in `<project_dir>/.claude/settings.json` (`onFailure` and `timeout` are
-   required for the gate, see docs/decisions/004):
+   required for the gate, see docs/decisions/004; the Stop hook takes neither: it must
+   never block the session, decisions/006):
 
    ```json
+   "UserPromptSubmit": [
+     {
+       "hooks": [
+         {
+           "type": "command",
+           "command": "\"/Users/<user>/Development/RemoteHands/RHServer/.venv/bin/rh-friend-verify\" --config \"/Users/<user>/Library/Application Support/RemoteHands/friend.toml\" --project \"<project_dir>\"",
+           "timeout": 30
+         }
+       ]
+     }
+   ],
    "PreToolUse": [
      {
        "hooks": [
@@ -281,6 +343,17 @@ Prerequisites: the core and bridge LaunchAgents, RHServer installed into its ven
          }
        ]
      }
+   ],
+   "Stop": [
+     {
+       "hooks": [
+         {
+           "type": "command",
+           "command": "\"/Users/<user>/Development/RemoteHands/RHServer/.venv/bin/rh-friend-reply\" --config \"/Users/<user>/Library/Application Support/RemoteHands/friend.toml\" --project \"<project_dir>\"",
+           "timeout": 10
+         }
+       ]
+     }
    ]
    ```
 
@@ -289,7 +362,10 @@ Prerequisites: the core and bridge LaunchAgents, RHServer installed into its ven
    session (hook changes are picked up at start).
 
 5. Check: `claude --version` ≥ 2.1.295; in the agent's session ask for `ls` (not protected,
-   runs) and for `kill -CONT 1` (protected, blocked with `no_decision`).
+   runs) and for `kill -CONT 1` (protected, blocked with `no_decision`). Then from the
+   phone: a question arrives as `[RH ✔ … · question]`, the core's journal shows
+   `friend.message.received` and, when the agent has answered, `friend.message.answered`
+   (`rhcore journal` or the Log: "<agent> answered"); the reply text is a chat entry.
 
 ### Rollback (one command, from the phone over SSH)
 

@@ -2,8 +2,9 @@
 
     rh-friend-bridge --config <friend.toml> [--once]
 
-For each new envelope in inbox_dir it types one line, `⟦rh:<id>⟧`, into the
-configured tmux target and presses Enter. It never reads the message: the
+For each new envelope in inbox_dir it presses Escape (the owner's message interrupts;
+`[bridge] interrupt`), types one line, `⟦rh:<id>⟧`, into the configured tmux target
+and presses Enter. It never reads the message: the
 agent-side verifier loads and checks the envelope itself. Delivered ids are kept in
 [bridge] state_file, so a restart does not type them again.
 """
@@ -40,8 +41,22 @@ def pending(inbox: Path, delivered: set[str]) -> list[str]:
     return [p.stem for p in files if p.stem not in delivered]
 
 
-def type_pointer(bridge: BridgeConfig, sid: str, run: Runner = _run) -> None:
+ESCAPE_PAUSE_S = 0.3  # Claude Code needs a moment to stop the turn before the next line
+
+
+def type_pointer(
+    bridge: BridgeConfig,
+    sid: str,
+    run: Runner = _run,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """One Escape first (the owner's message interrupts a working agent and keeps what it
+    did; idle, it is a no-op; on a permission prompt it declines), then the pointer, then
+    Enter. Exactly one Escape: two on an empty line open Claude Code's rewind menu."""
     line = pointer(sid)
+    if bridge.interrupt:
+        run([bridge.tmux, "send-keys", "-t", bridge.target, "Escape"])
+        sleep(ESCAPE_PAUSE_S)
     run([bridge.tmux, "send-keys", "-t", bridge.target, "-l", line])
     run([bridge.tmux, "send-keys", "-t", bridge.target, "Enter"])
 
@@ -60,7 +75,12 @@ def _save_state(path: Path, delivered: set[str]) -> None:
     os.replace(tmp, path)
 
 
-def step(inbox: Path, bridge: BridgeConfig, run: Runner = _run) -> list[str]:
+def step(
+    inbox: Path,
+    bridge: BridgeConfig,
+    run: Runner = _run,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[str]:
     """Deliver everything pending once; return the ids typed."""
     delivered = _load_state(bridge.state_file)
     typed = []
@@ -69,7 +89,7 @@ def step(inbox: Path, bridge: BridgeConfig, run: Runner = _run) -> list[str]:
             pointer(sid)
         except ValueError:
             continue  # not an envelope name; the core never writes one
-        type_pointer(bridge, sid, run)
+        type_pointer(bridge, sid, run, sleep)
         delivered.add(sid)
         _save_state(bridge.state_file, delivered)
         typed.append(sid)

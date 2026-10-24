@@ -20,6 +20,7 @@ rh-friend-verify = "rh_friend.verify:main"
 rh-friend-bridge = "rh_friend.bridge:main"
 rh-friend-gate = "rh_friend.gate:main"
 rh-friend-ask = "rh_friend.ask:main"
+rh-friend-reply = "rh_friend.reply:main"
 
 [dependency-groups]
 dev = [
@@ -65,6 +66,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 "tests/test_friend_decide.py" = ["F811"]  # the `env` fixture is imported from test_core_flow
 "tests/test_friend_messages.py" = ["F811"]
+"tests/test_friend_reply.py" = ["F811"]
 
 [tool.mypy]
 python_version = "3.12"

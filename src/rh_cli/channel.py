@@ -52,7 +52,7 @@ def agent_config_text(
 
     `rules_text`: the `[[gate.protected]]` tables to keep as they are (the owner's edits
     survive a switch); None writes the default rules with `owner_names`."""
-    from rh_friend.config import default_protected
+    from rh_friend.config import DEFAULT_QUESTION_BASH, DEFAULT_QUESTION_TOOLS, default_protected
 
     ch = cfg.ch
     if not cfg.key_path.exists():
@@ -74,6 +74,7 @@ def agent_config_text(
         "[bridge]",
         f"tmux = {q(tmux)}",
         f"target = {q(ch.target)}",
+        "interrupt = true   # one Escape before each message: the owner's message interrupts",
         "",
         "# PreToolUse gate (rh-friend-gate): a protected call needs a fresh allow decision",
         "# from the phone for exactly that call. Any matching rule protects the call.",
@@ -81,6 +82,12 @@ def agent_config_text(
         f"admin_socket = {q(cfg.admin_socket)}",
         f"decide_window_s = {cfg.decide_window_s}",
         f"ask = {q(ask)}",
+        "# Question mode (the owner's message is a question, not a task): these tools and",
+        "# read-only shell commands run freely; anything else needs a decision or a task.",
+        "question_tools = [" + ", ".join(q(t) for t in DEFAULT_QUESTION_TOOLS) + "]",
+        "question_bash = [",
+        *[f"  {q(b)}," for b in DEFAULT_QUESTION_BASH],
+        "]",
     ]
     text = "\n".join(lines) + "\n"
     if rules_text is not None:
@@ -325,7 +332,8 @@ def channel_set(
     print(f"channel: {previous or '—'} → {req.agent} (core reports {seen})", file=out)
     print("Still yours to do:", file=out)
     print(
-        f"  - hooks rh-friend-verify / rh-friend-gate in {project}/.claude/settings.json "
+        f"  - hooks rh-friend-verify (UserPromptSubmit), rh-friend-gate (PreToolUse) and "
+        f"rh-friend-reply (Stop) in {project}/.claude/settings.json "
         f"(--config {req.agent_config} --project {project})",
         file=out,
     )
