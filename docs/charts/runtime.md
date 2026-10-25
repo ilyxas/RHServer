@@ -1,6 +1,7 @@
 # Runtime view
 
 The processes that run on the Mac, the phone, and the channels between them.
+Dashed: the optional legacy gate (not part of a standard install).
 
 ```mermaid
 flowchart LR
@@ -12,47 +13,56 @@ flowchart LR
         subgraph core_proc["rh-core (launchd com.ilya.rh.core)"]
             api["app: HTTP + WebSocket API<br/>every response signed"]
             admin["admin socket<br/>admin.sock (0600)"]
-            store[("store: SQLite<br/>devices, nonces,<br/>questions, decisions")]
+            store[("store: SQLite<br/>devices, nonces, messages + state,<br/>replies, questions, decisions")]
             journal[("journal<br/>YYYYMMDD.jsonl")]
-            data["data sources<br/>sys.*, agents.status, questions"]
+            data["data sources<br/>sys.*, agents.status"]
         end
 
         inbox[["inbox dir<br/>signed envelopes"]]
-        cli["rhcore CLI<br/>(pair, devices, friend-config)"]
+        cli["rhcore CLI<br/>(pair, devices, friend-config,<br/>channel set)"]
         bridge["rh-friend-bridge<br/>(launchd com.ilya.rh.bridge)"]
 
-        subgraph friend_sess["Friend session (Claude Code in tmux)"]
+        subgraph agent_sess["Agent session (Claude Code in tmux)"]
             verify["rh-friend-verify<br/>UserPromptSubmit hook"]
-            gate["rh-friend-gate<br/>PreToolUse hook"]
-            ask["rh-friend-ask"]
+            reply["rh-friend-reply<br/>Stop hook / --progress / --flush"]
+            gate["rh-friend-gate + rh-friend-ask<br/>(optional legacy)"]
         end
 
-        cfg[["friend.toml<br/>pinned core key, paths,<br/>[gate] rules"]]
+        state[["project state/<br/>reply target (rh_current.json),<br/>pending replies (rh_pending.jsonl)"]]
+        cfg[["agent config (friend.toml)<br/>pinned core key, paths,<br/>admin_socket, [bridge]"]]
         ts["tailscaled"]
     end
 
-    app -- "signed requests over Tailscale<br/>/v1/* , /v1/ws" --> api
+    app -- "signed requests over Tailscale<br/>/v1/friend, /v1/friend/messages, /v1/ws" --> api
     api -- "whois: peer node" --> ts
     api --> store & journal
     api --> data
     api -- "friend.send / friend.decide<br/>spooled as received" --> inbox
 
     cli -- "JSON Lines" --> admin
-    ask -- "friend.ask / withdraw" --> admin
-    gate -- "friend.decision.use" --> admin
+    verify -- "friend.received / friend.rejected" --> admin
+    reply -- "friend.reply" --> admin
+    gate -.-> admin
     admin --> store & journal
 
     bridge -- "watch" --> inbox
-    bridge -- "tmux send-keys ⟦rh:id⟧" --> friend_sess
+    bridge -- "Escape, then tmux send-keys ⟦rh:id⟧" --> agent_sess
     verify -- "load + re-check signature" --> inbox
-    gate -- "read decide envelopes" --> inbox
-    verify & gate & ask & bridge -.-> cfg
+    gate -.-> inbox
+    verify -- "write reply target" --> state
+    reply -- "read target, queue on failure" --> state
+    verify & reply & bridge -.-> cfg
+
+    classDef optional stroke-dasharray: 5 5
+    class gate optional
 ```
 
 Trust notes:
 
-- The core, the inbox and the bridge are transport. The Friend hooks check the phone's
-  signature themselves against the device list signed by the pinned core key, so a broken
+- The core, the inbox and the bridge are transport. The verifier checks the phone's
+  signature itself against the device list signed by the pinned core key, so a broken
   transport can make a message fail, never pass.
-- The admin socket only keeps state (questions, one-time spending of an allow); it does
-  not vouch for signatures.
+- Replies are not signed: `friend.reply` over the admin socket is what the agent reports.
+  The app says so ("states and replies are what Friend reports, not verified facts").
+- Without the gate, what the agent may do is decided by its own permissions and
+  instructions; RH adds no tool-call checks.
