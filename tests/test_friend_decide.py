@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -1063,7 +1063,7 @@ def test_default_rules(tool: str, tool_input: dict[str, Any], protected: bool) -
     assert (gate.protected_by(default_rules(), tool, tool_input) is not None) is protected
 
 
-def test_rhcore_friend_config_includes_the_gate(short_dir: Path, tmp_path: Path) -> None:
+def test_rhcore_friend_config_needs_no_gate(short_dir: Path, tmp_path: Path) -> None:
     core = Core(dev_config(short_dir), clock=lambda: NOW, ssh_host_keys=str(short_dir / "none-*"))
     core.store.close()
     toml = tmp_path / "core.toml"
@@ -1074,14 +1074,9 @@ def test_rhcore_friend_config_includes_the_gate(short_dir: Path, tmp_path: Path)
     args = argparse.Namespace(config=toml, project=None, tmux="tmux", owner_names="owner")
     assert rhcore._friend_config(args, out) == 0
     cfg = from_dict(tomllib.loads(out.getvalue()))
-    assert cfg.gate is not None
-    assert cfg.gate.admin_socket == core.config.admin_socket
-    assert cfg.gate.decide_window_s == 120 and cfg.gate.log == (
-        core.config.ch.project_dir / "log" / "rh_gate.jsonl"
-    )
-    assert [r.name for r in cfg.gate.protected] == [r.name for r in default_rules()]
-    assert gate.protected_by(cfg.gate.protected, "Bash", {"command": "kill -CONT 1"})
-    assert cfg.gate.ask is not None and cfg.gate.ask.name == "rh-friend-ask"
+    assert cfg.gate is None
+    assert cfg.admin_socket == core.config.admin_socket
+    assert "[gate]" not in out.getvalue()
 
 
 def test_store_spends_a_decision_once() -> None:
@@ -1373,184 +1368,53 @@ def test_admin_socket_friend_commands_validate(env: Any) -> None:
     admin.close()
 
 
-# --- question mode ---------------------------------------------------------------------------
+# Message metadata never adds tool permissions or restrictions.
 
 
-def _note(cfg: FriendConfig, kind: str) -> None:
-    from datetime import UTC, datetime
+def test_reply_state_does_not_change_explicit_gate_rules(env: Any, tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
 
     from rh_friend.verify import write_current
 
-    # Stamped now: a note older than [gate] question_ttl_s sets no mode.
-    write_current(cfg, id="c" * 32, kind=kind, prompt_id="p-1", at=datetime.now(UTC))
-
-
-def test_read_only_bash() -> None:
-    allowed = gate.friend_config.DEFAULT_QUESTION_BASH
-    for ok in (
-        "ps aux | grep -i xcode",
-        "ps aux | grep python",  # a word inside a segment is an argument, not a command
-        "vm_stat; top -l 1 | head -20",
-        "git log --oneline -5 && git status",
-        "git branch -a",
-        "git remote -v",
-        "git remote show origin",
-        "df -h /",
-        "launchctl list | grep rh",
-        "date +%s",
-        "sort -r f | uniq -c",
-        "find . -name x",
-        "tmux capture-pane -p -t friend",
-        "gh pr view 20",
-        "sysctl -n hw.memsize",
-    ):
-        assert gate.read_only_bash(ok, allowed), ok
-    for bad in (
-        "rm -rf /tmp/x",
-        "cat x > y",
-        "ps aux | tee log",
-        "sudo ps",
-        "ls $(cat f)",
-        "echo `date`",
-        "ls; make",
-        "git push",
-        "git commit -m x",
-        "python3 script.py",
-        "",
-        "   ",
-        # the review's rows (2026-10-25)
-        "ls & rm -rf /tmp/x",  # a lone & backgrounds the first command and runs the second
-        "sed -i '' s/a/b/ f.txt",  # sed is not in the list at all
-        "awk 'BEGIN{system(\"touch /tmp/p\")}'",  # nor awk
-        "sort -o out.txt in.txt",
-        "sort -ro out.txt in.txt",  # combined short flags
-        "uniq a b",  # the second file is the output
-        "find . -fprint out",
-        "find . -fls out",
-        "find . -name x -exec rm {} \\;",
-        "find . -delete",
-        "git diff --output=f",
-        "git log --output f",
-        "rg --pre 'sh' x",
-        "git branch -D main",
-        "git branch new-name",
-        "git remote set-url origin x",
-        "git remote add x y",
-        "uv run pytest",
-        "python3 -c \"__import__('os').remove('f')\"",
-        "xxd -r a b",
-        "sysctl -w a=b",
-        "date 1010",
-        "date -s now",
-        "gh pr view --web",
-        "tmux capture-pane -b x",
-        "ps 2>&1",
-    ):
-        assert not gate.read_only_bash(bad, allowed), bad
-
-
-def test_question_mode_is_lifted_by_the_keyboard_and_by_time(env: Any, tmp_path: Path) -> None:
-    """HIGH 2 of the review: a question must not keep blocking the owner's own terminal
-    work after a deferred, waiting or interrupted turn."""
-    from rh_friend.verify import handle as verify_handle
-    from rh_friend.verify import read_current, write_current
-
-    core, client, clock, _ = env
+    core, _, clock, _ = env
     cfg = friend_cfg(core, tmp_path)
     project = str(cfg.project_dir)
-    edit = {
-        "tool_name": "Edit",
-        "tool_input": {"file_path": "/tmp/x", "old_string": "a", "new_string": "b"},
-    }
-    # A question is open (the reply was deferred, the agent asked, or the turn was cut short).
-    _note(cfg, "question")
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).blocked
-    # The owner types in the terminal: the mode is lifted, the message stays open.
-    out = verify_handle({"prompt": "also check the disk"}, cfg, project_dir=project)
-    assert out is not None and out["hookSpecificOutput"]["additionalContext"] == "[unsigned]"
-    note = read_current(cfg)
-    assert note is not None and note["id"] == "c" * 32 and note["kind"] == "task"
-    assert note["lifted_at"]
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
-    # A question older than the TTL sets no mode either.
-    from datetime import UTC, datetime, timedelta
-
-    write_current(
-        cfg,
-        id="d" * 32,
-        kind="question",
-        prompt_id=None,
-        at=datetime.now(UTC) - timedelta(seconds=cfg.gate.question_ttl_s + 1),  # type: ignore[union-attr]
-    )
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
-    write_current(cfg, id="d" * 32, kind="question", prompt_id=None, at=datetime.now(UTC))
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).blocked
-
-
-def test_question_mode_routes_work_through_a_decision(env: Any, tmp_path: Path) -> None:
-    core, client, clock, _ = env
-    phone = Phone()
-    pair(core, client, phone)
-    cfg = friend_cfg(core, tmp_path)
-    project = str(cfg.project_dir)
-    _note(cfg, "question")
-    read = {"tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}}
-    ps = {"tool_name": "Bash", "tool_input": {"command": "ps aux | grep X", "description": "d"}}
-    edit = {
-        "tool_name": "Edit",
-        "tool_input": {"file_path": "/tmp/x", "old_string": "a", "new_string": "b"},
-    }
-    make = {"tool_name": "Bash", "tool_input": {"command": "make build", "description": "build"}}
-    # Read-only: free. A plain ask call: free.
-    assert gate.handle(read, cfg, project_dir=project, now=clock).kind == "none"
-    assert gate.handle(ps, cfg, project_dir=project, now=clock).kind == "none"
-    ask_cmd = f"{gate.ask_program(cfg.gate)} --question x --bash y --description z"
-    ask_call = {"tool_name": "Bash", "tool_input": {"command": ask_cmd, "description": "ask"}}
-    assert gate.handle(ask_call, cfg, project_dir=project, now=clock).kind == "none"
-    # Work: protected, with a reason that points at rh-friend-ask.
-    out = gate.handle(edit, cfg, project_dir=project, now=clock)
+    for kind in ("question", "task"):
+        for age in (0, 1801):
+            write_current(
+                cfg,
+                id="a" * 32,
+                kind=kind,
+                prompt_id="p",
+                at=datetime.now(UTC) - timedelta(seconds=age),
+            )
+            for command in (
+                "git status",
+                "git -C /tmp/example status",
+                'for d in a b; do git -C "$d" status; done',
+                "make",
+            ):
+                out = gate.handle(
+                    {"tool_name": "Bash", "tool_input": {"command": command}},
+                    cfg,
+                    project_dir=project,
+                    now=clock,
+                )
+                assert out.kind == "none", (kind, age, command, out)
+            out = gate.handle(
+                {"tool_name": "Bash", "tool_input": {"command": "kill -CONT 1"}},
+                cfg,
+                project_dir=project,
+                now=clock,
+            )
+            assert out.blocked and out.rule == "kill"
+    cfg.current_file.write_text("broken JSON")
     assert (
-        out.blocked
-        and out.code == "no_decision"
-        and out.rule
-        and out.rule.startswith("question mode")
+        gate.handle(
+            {"tool_name": "Bash", "tool_input": {"command": "git status"}},
+            cfg,
+            project_dir=project,
+            now=clock,
+        ).kind
+        == "none"
     )
-    assert "asked a question" in (out.detail or "") and "rh-friend-ask" in (out.detail or "")
-    out = gate.handle(make, cfg, project_dir=project, now=clock)
-    assert out.blocked and out.code == "no_decision"
-    # The owner allows exactly that call: it goes through once, as any protected call.
-    q = core.ask("Build to see the error?", action_text("Bash", make["tool_input"]))
-    r = signed(
-        client, phone, "POST", "/v1/friend/decide", OP_DECIDE, "critical", decide_body(q, "allow")
-    )
-    assert r.status_code == 200, r.text
-    out = gate.handle(make, cfg, project_dir=project, now=clock)
-    assert out.kind == "allow", out
-    assert gate.handle(make, cfg, project_dir=project, now=clock).code == "already_used"
-    # The log names the rule.
-    last = json.loads(cfg.gate.log.read_text().splitlines()[-1])  # type: ignore[union-attr]
-    assert last["rule"].startswith("question mode")
-    # A task lifts the mode: the same Edit is nobody's business but the rules.
-    _note(cfg, "task")
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
-    assert gate.handle(make, cfg, project_dir=project, now=clock).kind == "none"
-    # The protected rules still win in task mode.
-    kill = {"tool_name": "Bash", "tool_input": {"command": "kill -CONT 1", "description": "d"}}
-    assert gate.handle(kill, cfg, project_dir=project, now=clock).rule == "kill"
-    # No note, or a closed one: no mode.
-    cfg.current_file.unlink()
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
-    cfg.current_file.write_text("not json")
-    assert gate.handle(edit, cfg, project_dir=project, now=clock).kind == "none"
-
-
-def test_the_note_itself_is_protected(tmp_path: Path) -> None:
-    rules = default_rules()
-    for path in ("/Users/owner/Alpha/state/rh_current.json", "state/rh_pending.jsonl"):
-        edit = {"file_path": path, "old_string": "a", "new_string": "b"}
-        assert gate.protected_by(rules, "Write", edit, cwd="/Users/owner/Alpha")
-        shell = {"command": f"echo x > {path}", "description": "d"}
-        assert gate.protected_by(rules, "Bash", shell, cwd="/Users/owner/Alpha")
-
-
-_ = Callable  # typing import kept for readers of the fixtures above

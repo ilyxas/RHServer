@@ -360,7 +360,7 @@ def test_signed_time_is_shown_in_local_time(tmp_path: Path) -> None:
     out = handle({"prompt": v["pointer"]}, cfg, project_dir=str(cfg.project_dir), now=lambda: now)
     assert out is not None
     signed = NOW.astimezone().strftime("%H:%M:%S")
-    assert f"· {signed} · question]" in out["hookSpecificOutput"]["additionalContext"]
+    assert f"· {signed}]" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_verified_message_leaves_a_note_and_a_receipt(tmp_path: Path) -> None:
@@ -378,15 +378,12 @@ def test_verified_message_leaves_a_note_and_a_receipt(tmp_path: Path) -> None:
     )
     assert out is not None and "decision" not in out
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert ctx.splitlines()[0].endswith(" · question]") and ctx.splitlines()[1].startswith(
-        "(a question"
-    )
+    assert ctx.splitlines()[0].startswith("[RH ✔ ")
+    assert "question]" not in ctx and "(a question" not in ctx
     assert ctx.endswith("\n" + v["expect"]["text"])
-    assert reports == [
-        {"cmd": "friend.received", "id": sid, "prompt_id": "p-1", "kind": "question"}
-    ]
+    assert reports == [{"cmd": "friend.received", "id": sid, "prompt_id": "p-1"}]
     note = json.loads(cfg.current_file.read_text(encoding="utf-8"))["open"]
-    assert note["id"] == sid and note["kind"] == "question" and note["prompt_id"] == "p-1"
+    assert note["id"] == sid and "kind" not in note and note["prompt_id"] == "p-1"
     assert cfg.current_file == cfg.project_dir / "state" / "rh_current.json"
     # A blocked pointer reports the rejection; the note stays as it was.
     reports.clear()
@@ -444,7 +441,7 @@ def test_rhcore_friend_config_pins_the_core_key(short_dir: Path, tmp_path: Path)
     assert cfg.inbox_dir == core.config.inbox_dir
     assert cfg.devices_file == core.config.devices_path
     assert cfg.bridge is not None and cfg.bridge.target == core.config.ch.target
-    assert cfg.gate is not None and cfg.gate.decide_window_s == core.config.decide_window_s
+    assert cfg.gate is None and cfg.admin_socket == core.config.admin_socket
     # --project is only a check: another folder is an error, not another agent.
     other = argparse.Namespace(config=toml, project=tmp_path / "x", tmux="tmux", owner_names="o")
     with pytest.raises(CoreConfigError, match="channel set"):

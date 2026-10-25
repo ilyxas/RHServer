@@ -162,42 +162,36 @@ def test_progress_replies_keep_the_message_open(env: Any) -> None:
     ]
 
 
-def test_turn_that_ends_with_a_question_waits(env: Any) -> None:
+def test_approval_questions_do_not_change_reply_state(env: Any) -> None:
     core, client, _, _ = env
     phone = Phone()
     pair(core, client, phone)
     sent = send(client, phone, body("why does the build fail?"))
     admin(core, {"cmd": "friend.received", "id": sent["id"]})
-    core.ask("Run the build to see the error?", action_text("Bash", {"command": "make"}))
-    got = admin(core, {"cmd": "friend.reply", "in_reply_to": sent["id"], "text": "I asked you"})
-    assert got["ok"] and got["state"] == "waiting"
-    assert [r["kind"] for r in got["replies"]] == ["progress"]
-    assert "friend.message.waiting" in [e["event"] for e in events(core)]
-    # The decision came, the agent finished: the next final reply answers.
-    for q in core.store.open_questions():
-        core.withdraw(q.id)
-    got = admin(core, {"cmd": "friend.reply", "in_reply_to": sent["id"], "text": "missing SDK"})
+    core.ask("Unrelated approval", action_text("Bash", {"command": "make"}))
+    got = admin(
+        core, {"cmd": "friend.reply", "in_reply_to": sent["id"], "text": "Here is my answer"}
+    )
     assert got["ok"] and got["state"] == "answered"
-    assert [r["kind"] for r in got["replies"]] == ["progress", "final"]
+    assert [r["kind"] for r in got["replies"]] == ["final"]
+    assert "friend.message.waiting" not in [e["event"] for e in events(core)]
+    assert len(core.store.open_questions()) == 1
 
 
-def test_new_message_supersedes_the_open_one(env: Any) -> None:
+def test_new_message_does_not_cancel_or_close_the_previous_one(env: Any) -> None:
     core, client, _, _ = env
     phone = Phone()
     pair(core, client, phone)
     first = send(client, phone, body("long task", kind="task"))
     admin(core, {"cmd": "friend.received", "id": first["id"]})
-    second = send(client, phone, body("stop, look at the disk first", msg_id="m-2"))
+    second = send(client, phone, body("How is it going?", msg_id="m-2"))
     by_id = {m["id"]: m for m in messages(client, phone)["messages"]}
-    assert by_id[first["id"]]["state"] == "superseded"
-    assert by_id[first["id"]]["superseded_by"] == second["id"]
-    assert by_id[first["id"]]["closed_at"]
+    assert by_id[first["id"]]["state"] == "received"
+    assert "superseded_by" not in by_id[first["id"]] and "closed_at" not in by_id[first["id"]]
     assert by_id[second["id"]]["state"] == "accepted"
-    # The interrupted turn's late reply, if any, is refused; the new one is answered.
-    got = admin(core, {"cmd": "friend.reply", "in_reply_to": first["id"], "text": "late"})
-    assert got["error"] == "closed"
-    e = [x for x in events(core) if x["event"] == "friend.message.superseded"]
-    assert e and e[0]["id"] == first["id"] and e[0]["by"] == second["id"]
+    got = admin(core, {"cmd": "friend.reply", "in_reply_to": first["id"], "text": "Finished"})
+    assert got["ok"] and got["state"] == "answered"
+    assert not [x for x in events(core) if x["event"] == "friend.message.superseded"]
 
 
 def test_rejected_by_the_verifier(env: Any) -> None:

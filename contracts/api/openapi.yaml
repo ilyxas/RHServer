@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RemoteHands core API
-  version: 0.6.0
+  version: 0.6.1
   description: |
     HTTP API of rh-core (SPEC §4). Operations are added stage by stage; the
     signing scheme below applies to every operation unless it says otherwise.
@@ -521,20 +521,17 @@ paths:
         The body is JSON {"id","text","to"} plus the optional "kind" and "re": `to` is
         status.channel.agent, `id` is the phone's message id (1–64 of A-Z a-z 0-9 -),
         `text` has 1–8000 characters, `kind` is question (default) or task, `re` is the
-        spool id of an earlier message this one follows up ("make it a task"). A body
+        spool id of an earlier message this one follows up. A body
         that does not fit is refused with bad_request.
 
-        kind: a question asks for an answer in text; the agent-side gate lets a question
-        use read-only tools freely and routes anything else through a signed decision
-        (friend.questions / friend.decide). A task lets the agent work; only the
-        protected actions of the gate need a decision. The kind is signed with the body
-        and shown to the agent in the verified label.
+        kind and re are accepted for compatibility and stored as metadata. They do
+        not select a tool policy or grant permission. The verifier delivers the owner's
+        text with its verified origin, just as input to the existing agent session.
 
-        The core keeps every accepted message with its text and state (friend.messages);
-        the journal keeps the hash of the text, not the text. A new message supersedes
-        every earlier one the agent still owed an answer to: the bridge interrupts the
-        agent, so the previous turn ends without a reply (with the bridge's interrupt
-        turned off the previous turn may still finish; its late reply is refused). Sending
+        The core keeps every accepted message with its text and delivery state;
+        the journal keeps the hash of the text. The bridge attempts to interrupt the
+        current turn before delivery. A new message does not cancel a task or close
+        previous messages. A reply means an answer arrived, not that a task finished. Sending
         the same `id` with the same body again from the same device (a retry after a lost
         answer) returns the first message's answer and creates nothing; the same `id`
         with another body is bad_request.
@@ -588,18 +585,14 @@ paths:
         and `more` for paging), and the answer lists the messages changed after it,
         oldest change first, each with all its replies.
 
-        States, in the order they happen: accepted (the core has it), received (the
-        agent-side verifier delivered it to the session), waiting (the agent asked the
-        owner a decision since; the reply so far is progress), answered (the agent's
-        final reply is in `replies`). Everything after accepted, and every reply, is
-        what the agent side reported over the core's local socket: a fact from the
-        owner's Mac, not a signed one, so the app shows it as the agent's report, not
-        as verified. Terminal without an answer: rejected (the
-        verifier blocked it, `reject_code` says why), superseded (a newer message from
-        the owner replaced it, `superseded_by`). A session that stops never moves a
-        message by itself: it stays received, and agents.status shows the agent is not
-        running. The owner's texts and the agent's replies are also chat entries in the
-        Log (log.list, filter chat).
+        Delivery states: accepted (the core has the message), received (the verifier
+        reports delivery), answered (a reply arrived), rejected (the verifier refused it).
+        Progress replies keep the delivery state. States after accepted and replies are
+        reports from the agent side, not proof that work started, finished or was cancelled.
+        waiting and superseded remain readable for historical rows; new messages and
+        unrelated approval questions no longer produce them. Earlier unanswered messages
+        keep their state when another message arrives. The bridge's interruption is not
+        cancellation of a task. Texts and replies are also available in the Log chat filter.
       x-rh-op: friend.messages
       x-rh-key: normal
       requestBody:
@@ -885,8 +878,8 @@ components:
       required: [id, seq, message_id, device, agent, kind, text, accepted_at, state, replies]
       description: >-
         An owner's message as the phone shows it, with its state and replies. The states
-        received, waiting and answered, the reject code and the replies are reported by
-        the agent side (unsigned); accepted and superseded are the core's own.
+        Delivery state and replies after accepted are agent-side reports. Historical
+        waiting/superseded rows are retained. These states never describe task permissions.
       properties:
         id: {type: string, pattern: "^[0-9a-f]{32}$", description: spool id, as friend.send answered}
         seq: {type: integer, minimum: 1, description: Changes on every update; the cursor of friend.messages}
@@ -911,7 +904,7 @@ components:
       required: [seq, kind, text, at]
       properties:
         seq: {type: integer, minimum: 1}
-        kind: {enum: [progress, final], description: final answers the message; progress is on the way (or the turn ended with a question to the owner)}
+        kind: {enum: [progress, final], description: final answers the message; progress is an explicit intermediate reply}
         text: {type: string, minLength: 1, maxLength: 8000}
         at: {$ref: "#/components/schemas/Timestamp"}
     FriendQuestion:

@@ -1,5 +1,13 @@
 # contracts/ changelog
 
+## Simple message channel (0.6.1)
+
+- Wire shapes and signed bytes are unchanged. `kind` and `re` remain compatibility metadata;
+  `kind` no longer changes tool permissions or the verifier's instructions.
+- A new message no longer supersedes earlier messages. An answer records a received reply,
+  not task completion; open approval questions no longer infer a waiting state.
+- Historical `waiting` / `superseded` records remain readable. No pairing or crypto changes.
+
 ## friend slice 3: the agent answers, the phone sees the state
 
 - `api/openapi.yaml` 0.6.0:
