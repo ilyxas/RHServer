@@ -23,14 +23,21 @@ against the `[[gate.protected]]` rules; only a call that matches goes any furthe
   is only ever let through by this hook's silence, never blocked by its failure.
 - No CLAUDE_PROJECT_DIR at all: protected calls are blocked, unprotected ones pass.
 
+When the newest decision for the action is not a usable allow (none yet, expired, used),
+the gate asks the owner itself: it records the question in the core (`friend.ask`, the
+rule's name and the exact call), marks the inbox as waited on (`.gate-wait`, so the bridge
+does not type the answer with an Escape that would cancel this very call) and waits up to
+`[gate] wait_s` for a newer decision, then decides as above. No answer in time: the
+question is withdrawn and the call blocks. A deny signed within `decide_window_s` blocks
+at once, without asking again. `wait_s = 0` turns asking off.
+
 A plain call of `rh-friend-ask` (one command, no shell operators) is never protected,
 whatever its arguments say: asking must not need an answer first.
 
 Paths in `file_path`-like fields are resolved against the call's `cwd` before the rules
 see them, so a relative "CLAUDE.md" is the file it names.
 
-The gate never waits for the owner. It only looks for a decision that already exists;
-asking is `rh-friend-ask`.
+`rh-friend-ask` stays for asking ahead of a call.
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -72,6 +80,14 @@ PATH_FIELDS = ("file_path", "notebook_path", "path")
 # {"ok": True, ...} or {"ok": False, "error": <code>, "message": ...}. Raises
 # CoreUnreachable when the core does not answer.
 Spend = Callable[[str, str, str], dict[str, Any]]
+# Ask the owner about an action: (question text, action) -> the question id. Raises
+# CoreUnreachable when the core does not answer, ValueError when it refuses.
+Ask = Callable[[str, str], str]
+# Withdraw an open question by id; best effort.
+Withdraw = Callable[[str], None]
+
+WAIT_MARK = ".gate-wait"  # in inbox_dir while the gate waits: the bridge leaves decisions
+POLL_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -282,6 +298,23 @@ def _body_fields(envelope: Envelope) -> dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
+@dataclass(frozen=True)
+class Asker:
+    """How the gate asks and waits; the hook builds it over the admin socket."""
+
+    ask: Ask
+    withdraw: Withdraw
+    clock: Callable[[], datetime]
+    sleep: Callable[[float], None] = time.sleep
+
+
+def question_text(rule: str, tool_name: str, tool_input: Any) -> str:
+    """What the phone shows above the exact action: which rule stopped which call."""
+    said = tool_input.get("description") if isinstance(tool_input, dict) else None
+    head = f"Gate: {rule}"
+    return f"{head} ({tool_name}: {said})" if isinstance(said, str) and said else head
+
+
 def decide(
     tool_name: str,
     tool_input: Any,
@@ -290,11 +323,13 @@ def decide(
     now: datetime,
     spend: Spend,
     cwd: str | None = None,
+    asker: Asker | None = None,
 ) -> Outcome:
     """The gate's verdict for one tool call (the protected check included).
 
     For one action the newest decision counts: a deny blocks even when an older unused
-    allow exists; an allow is spent only when nothing newer is in the inbox."""
+    allow exists; an allow is spent only when nothing newer is in the inbox. Without a
+    usable allow the owner is asked and the gate waits (`asker`, `[gate] wait_s`)."""
     rule = rule_for(cfg, tool_name, tool_input, cwd)
     if rule is None:
         return Outcome("none")
@@ -316,6 +351,50 @@ def decide(
     found = candidates(
         cfg.inbox_dir, action=action, devices=devices, now=now, window=window, agent=cfg.agent
     )
+    if asker is None or gate.wait_s == 0:
+        return _settle(found, cfg, rule, tool_name, action, spend)
+    args = (asker, cfg, rule, tool_name, tool_input, action, devices, window, spend)
+    if _should_ask(found, now, window):
+        return _ask_then_settle(*args)
+    out = _settle(found, cfg, rule, tool_name, action, spend)
+    if out.code in REASK_CODES:
+        # Only the core knows an allow was spent or voided: ask for a new one.
+        return _ask_then_settle(*args)
+    return out
+
+
+# The core refused the newest allow for a reason a new answer can fix.
+REASK_CODES = frozenset({"already_used", "superseded", "expired"})
+
+
+def _ask_then_settle(
+    asker: Asker,
+    cfg: FriendConfig,
+    rule: str,
+    tool_name: str,
+    tool_input: Any,
+    action: str,
+    devices: Any,
+    window: timedelta,
+    spend: Spend,
+) -> Outcome:
+    assert cfg.gate is not None
+    try:
+        found, _ = _ask_and_wait(
+            asker, cfg, question_text(rule, tool_name, tool_input), action, devices, window
+        )
+    except ValueError as e:
+        return Outcome("block", code="ask_refused", detail=str(e), rule=rule, action=action)
+    if not found:
+        detail = f"no answer from the owner in {cfg.gate.wait_s} s"
+        return Outcome("block", code="no_decision", detail=detail, rule=rule, action=action)
+    return _settle(found, cfg, rule, tool_name, action, spend)
+
+
+def _settle(
+    found: list[Candidate], cfg: FriendConfig, rule: str, tool_name: str, action: str, spend: Spend
+) -> Outcome:
+    """The verdict from the decisions found: the newest counts; an allow is spent once."""
     if not found:
         detail = f"no decision for this {tool_name} call"
         return Outcome("block", code="no_decision", detail=detail, rule=rule, action=action)
@@ -348,6 +427,73 @@ def decide(
     )
 
 
+def _should_ask(found: list[Candidate], now: datetime, window: timedelta) -> bool:
+    """Ask unless the newest decision already settles it: a usable allow, or a fresh deny."""
+    if not found:
+        return True
+    latest = found[0]
+    if latest.code is None:
+        return False  # a verified allow within the window: spend it
+    # A fresh deny: the owner just said no to exactly this.
+    signed = latest.signed_at
+    fresh_deny = latest.is_deny and signed is not None and now - signed <= window
+    return not fresh_deny
+
+
+def _ask_and_wait(
+    asker: Asker,
+    cfg: FriendConfig,
+    text: str,
+    action: str,
+    devices: Any,
+    window: timedelta,
+) -> tuple[list[Candidate], datetime]:
+    """Ask, then wait for a decision that was not in the inbox before; ([], now) on none."""
+    assert cfg.gate is not None
+    asked_at = asker.clock()
+    before = {
+        c.sid
+        for c in candidates(
+            cfg.inbox_dir,
+            action=action,
+            devices=devices,
+            now=asked_at,
+            window=window,
+            agent=cfg.agent,
+        )
+    }
+    qid = asker.ask(text, action)
+    mark = cfg.inbox_dir / WAIT_MARK
+    with contextlib.suppress(OSError):
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text(qid, encoding="utf-8")
+    deadline = asked_at + timedelta(seconds=cfg.gate.wait_s)
+    try:
+        while True:
+            now = asker.clock()
+            found = candidates(
+                cfg.inbox_dir,
+                action=action,
+                devices=devices,
+                now=now,
+                window=window,
+                agent=cfg.agent,
+            )
+            # By envelope, not by signed time: seconds are whole, and an answer to the
+            # question can carry the same second as an older decision.
+            newer = [c for c in found if c.sid not in before]
+            if newer:
+                return newer, now
+            if now >= deadline:
+                with contextlib.suppress(Exception):
+                    asker.withdraw(qid)
+                return [], now
+            asker.sleep(POLL_S)
+    finally:
+        with contextlib.suppress(OSError):
+            mark.unlink()
+
+
 def _load_devices(cfg: FriendConfig) -> Any:
     from rh_common.friend import read_devices_doc
 
@@ -377,6 +523,27 @@ def spend_over_socket(gate: GateConfig) -> Spend:
     return spend
 
 
+def asker_over_socket(gate: GateConfig) -> Asker:
+    def ask(text: str, action: str) -> str:
+        answer = core_socket.call(
+            gate.admin_socket,
+            {"cmd": "friend.ask", "text": text, "action": action},
+            timeout=SOCKET_TIMEOUT_S,
+        )
+        if not answer.get("ok"):
+            raise ValueError(f"{answer.get('error')}: {answer.get('message')}")
+        return str(answer["id"])
+
+    def withdraw(qid: str) -> None:
+        core_socket.call(
+            gate.admin_socket,
+            {"cmd": "friend.question.withdraw", "id": qid},
+            timeout=SOCKET_TIMEOUT_S,
+        )
+
+    return Asker(ask=ask, withdraw=withdraw, clock=_now)
+
+
 # --- the hook ------------------------------------------------------------------------------
 
 
@@ -404,6 +571,7 @@ def handle(
     project_dir: str | None,
     now: Callable[[], datetime] = _now,
     spend: Spend | None = None,
+    asker: Asker | None = None,
 ) -> Outcome:
     """Outcome for one PreToolUse event; logs it.
 
@@ -441,7 +609,7 @@ def handle(
             if cfg.gate is None:
                 raise friend_config.ConfigError("friend.toml has no [gate] table")
             spend = spend_over_socket(cfg.gate)
-        out = decide(tool_name, tool_input, cfg, now=at, spend=spend, cwd=cwd)
+        out = decide(tool_name, tool_input, cfg, now=at, spend=spend, cwd=cwd, asker=asker)
     except friend_config.ConfigError as e:
         out = Outcome(
             "block", "no_gate_config", str(e), rule=rule, action=_safe_action(tool_name, tool_input)
@@ -574,7 +742,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if config_error is not None or cfg is None:
         return _block("config", config_error or "no config")
-    out = handle(event, cfg, project_dir=project_dir)
+    asker = asker_over_socket(cfg.gate) if cfg.gate is not None else None
+    out = handle(event, cfg, project_dir=project_dir, asker=asker)
     if out.kind == "none":
         return 0
     if out.kind == "allow":

@@ -349,6 +349,82 @@ def test_gate_end_to_end_over_the_admin_socket(env: Any, tmp_path: Path) -> None
     } <= kinds
 
 
+def test_gate_asks_the_owner_and_waits(env: Any, tmp_path: Path) -> None:
+    from rh_friend import bridge
+    from rh_friend.config import BridgeConfig
+
+    core, client, clock, _ = env
+    phone = Phone()
+    pair(core, client, phone)
+    cfg = friend_cfg(core, tmp_path)
+    assert cfg.gate is not None and cfg.gate.wait_s > 0
+    tool_input = {"command": "kill -CONT 4242", "description": "resume"}
+    event = {"tool_name": "Bash", "tool_input": tool_input, "hook_event_name": "PreToolUse"}
+    project = str(cfg.project_dir)
+    mark = cfg.inbox_dir / gate.WAIT_MARK
+    seen: list[str] = []  # what the phone saw, and whether the bridge held the answer
+
+    def phone_answers(decision: str | None) -> Any:
+        """The gate's sleep: while it waits, the phone reads the question and answers."""
+
+        def sleep(_: float) -> None:
+            assert mark.exists()  # the bridge is told to leave the answer to the gate
+            (q,) = core.store.open_questions()
+            seen.append(q.text)
+            if decision is None:
+                clock.offset += timedelta(seconds=cfg.gate.wait_s + 1)  # type: ignore[union-attr]
+                return
+            key = "critical" if decision == "allow" else "normal"
+            r = signed(
+                client, phone, "POST", "/v1/friend/decide", OP_DECIDE, key, decide_body(q, decision)
+            )
+            assert r.status_code == 200, r.text
+            calls: list[list[str]] = []
+            state = BridgeConfig(tmux="tmux", target="t", state_file=tmp_path / "bridge.json")
+            assert bridge.step(cfg.inbox_dir, state, lambda c: calls.append(list(c))) == []
+            assert calls == []  # no Escape that would cancel the call the gate holds
+
+        return dataclasses.replace(gate.asker_over_socket(cfg.gate), clock=clock, sleep=sleep)  # type: ignore[arg-type]
+
+    import dataclasses
+
+    # 1. No decision yet: the gate asks (the rule and the call's description), the phone
+    #    allows, the call goes through once.
+    out = gate.handle(event, cfg, project_dir=project, now=clock, asker=phone_answers("allow"))
+    assert out.kind == "allow", out
+    assert seen == ["Gate: kill (Bash: resume)"] and not mark.exists()
+    # 2. Asked again, denied: blocked as denied.
+    out = gate.handle(event, cfg, project_dir=project, now=clock, asker=phone_answers("deny"))
+    assert out.blocked and out.code == "denied"
+    # 3. Right after that deny the gate does not ask again: it blocks at once.
+    out = gate.handle(event, cfg, project_dir=project, now=clock, asker=phone_answers("allow"))
+    assert out.blocked and out.code == "denied" and len(seen) == 2
+    # 4. Later, no answer in wait_s: blocked, the question withdrawn, the mark gone.
+    clock.offset += timedelta(seconds=cfg.gate.decide_window_s + 1)
+    out = gate.handle(event, cfg, project_dir=project, now=clock, asker=phone_answers(None))
+    assert out.blocked and out.code == "no_decision" and "no answer" in (out.detail or "")
+    assert core.store.open_questions() == [] and not mark.exists()
+
+
+def test_bridge_types_a_decision_when_the_gate_is_not_waiting(tmp_path: Path) -> None:
+    from rh_friend import bridge
+    from rh_friend.config import BridgeConfig
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    sid = "d" * 32
+    (inbox / f"{sid}.json").write_text("{}")  # not readable as a decision: always typed
+    state = BridgeConfig(tmux="tmux", target="t", state_file=tmp_path / "bridge.json")
+    (inbox / gate.WAIT_MARK).write_text("q")
+    calls: list[list[str]] = []
+    assert bridge.step(inbox, state, lambda c: calls.append(list(c)), lambda _: None) == [sid]
+    assert len(calls) == 3
+    # A mark left behind by a gate that died is old: it holds nothing.
+    old = time.time() - bridge.GATE_WAIT_MAX_S - 1
+    os.utime(inbox / gate.WAIT_MARK, (old, old))
+    assert not bridge.gate_waiting(inbox)
+
+
 def test_gate_with_the_core_down(env: Any, tmp_path: Path) -> None:
     core, client, clock, _ = env
     phone = Phone()
@@ -669,12 +745,13 @@ def test_a_plain_ask_call_is_not_protected(tmp_path: Path) -> None:
     assert verdict(f"{program} --question x --bash ls --description d; kill -CONT 1") == "block"
     assert verdict(f"{program} --question x --bash ls --description d && kill -CONT 1") == "block"
     assert verdict(f"{program} --question x --bash ls --description d\nkill -CONT 1") == "block"
-    assert verdict(f"{program} --question x > ~/Friend/.claude/settings.json") == "block"
+    assert verdict(f"{program} --question x > out | xargs kill -CONT") == "block"
     assert verdict(f'{program} --question "$(kill -CONT 1)"') == "block"
     assert verdict(f"{program} --question `kill -CONT 1`") == "block"
-    assert verdict(f"rh-friend-ask --question '{question}'") == "block"  # not by its full path
-    assert verdict(f"{tmp_path}/other/rh-friend-ask --question '{question}'") == "block"
-    assert verdict(f"{program} --question '{question}") == "block"  # unbalanced quote
+    # (Unquoted, the kill is code the rules see; quoted text is only data to them.)
+    assert verdict("rh-friend-ask --question x kill -CONT 4242") == "block"  # not its full path
+    assert verdict(f"{tmp_path}/other/rh-friend-ask --question x kill -CONT 4242") == "block"
+    assert verdict(f"{program} kill -CONT 4242 --question '{question}") == "block"  # unbalanced
     # Without [gate] ask, the program next to the running interpreter is the exempt one.
     assert gate.ask_program(None).name == "rh-friend-ask"
     assert gate.ask_program(base.gate).name == "rh-friend-ask"
@@ -683,7 +760,7 @@ def test_a_plain_ask_call_is_not_protected(tmp_path: Path) -> None:
 # --- the hook process ----------------------------------------------------------------------------
 
 
-def write_toml(cfg: FriendConfig, path: Path, *, rules: bool = True) -> None:
+def write_toml(cfg: FriendConfig, path: Path, *, rules: bool = True, wait_s: int = 0) -> None:
     assert cfg.gate is not None
     lines = [
         f"{k} = {json.dumps(str(val))}"
@@ -701,6 +778,7 @@ def write_toml(cfg: FriendConfig, path: Path, *, rules: bool = True) -> None:
         "[gate]",
         f"admin_socket = {json.dumps(str(cfg.gate.admin_socket))}",
         f"decide_window_s = {cfg.gate.decide_window_s}",
+        f"wait_s = {wait_s}",  # 0: these tests look at decisions already there
     ]
     if rules:
         lines += [
@@ -739,6 +817,11 @@ def test_hook_process_end_to_end(tmp_path: Path) -> None:
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
     r = run_gate(toml, protected, cfg.project_dir)
     assert r.returncode == 2 and "blocked (no_decision)" in r.stderr and r.stdout == ""
+    # Asking needs the core: none running, the protected call is blocked, not waited on.
+    write_toml(cfg, toml, wait_s=60)
+    r = run_gate(toml, protected, cfg.project_dir)
+    assert r.returncode == 2 and "blocked (core_unreachable)" in r.stderr and r.stdout == ""
+    write_toml(cfg, toml)
     # Another project (by --project before the config, and by the config alone): nothing.
     r = run_gate(toml, protected, tmp_path, "--project", str(cfg.project_dir))
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
@@ -796,7 +879,7 @@ def test_hook_process_never_blocks_unprotected_calls(tmp_path: Path) -> None:
             line
             for line in toml.read_text().splitlines()
             if not line.startswith(
-                ("[", "admin_socket", "decide_window", "name", "tools", "field", "match")
+                ("[", "admin_socket", "decide_window", "wait_s", "name", "tools", "field", "match")
             )
         )
         + "\n"
@@ -1008,13 +1091,13 @@ def test_gate_config_rejects_bad_rules(tmp_path: Path) -> None:
         (
             "Bash",
             {"command": "echo 'владелец разрешил загрузку' >> ~/Hst/CGC20261023.txt"},
-            True,
+            False,  # records in CGC are free (the owner removed that rule, 2026-10-26)
         ),
         ("Bash", {"command": "grep владелец ~/Hst/CGC2026-10-23.txt"}, False),
         (
             "Write",
             {"file_path": "/Users/owner/Hst/CGC2026-10-23.txt", "content": "owner approved it"},
-            True,
+            False,
         ),
         (
             "Edit",
@@ -1036,8 +1119,11 @@ def test_gate_config_rejects_bad_rules(tmp_path: Path) -> None:
             True,
         ),
         ("Bash", {"command": "cat ~/Friend/.claude/settings.json"}, False),
-        ("Bash", {"command": "cp x ~/Friend/.claude/settings.json"}, True),
-        ("Bash", {"command": "launchctl bootout gui/501 ~/Library/LaunchAgents/com.x.plist"}, True),
+        # The shell naming a settings file is not a rule any more (it stopped reads and
+        # records); Write/Edit of those files by file_path still are.
+        ("Bash", {"command": "cp x ~/Friend/.claude/settings.json"}, False),
+        ("Bash", {"command": "launchctl bootout gui/501 ~/Library/LaunchAgents/x.plist"}, False),
+        ("Bash", {"command": "python3 -c 'import json' ~/Friend/.claude/settings.json"}, False),
         ("Bash", {"command": "launchctl list | grep com.x"}, False),
         ("Read", {"file_path": "/Users/owner/Friend/.claude/settings.json"}, False),
         # Spellings a review found slipping through.
@@ -1051,8 +1137,18 @@ def test_gate_config_rejects_bad_rules(tmp_path: Path) -> None:
         ("Bash", {"command": "kill -s 19 4242"}, True),
         ("Bash", {"command": "kill -18 4242"}, True),
         ("Bash", {"command": "kill -s SIGSTOP 4242"}, True),
-        ("Bash", {"command": "cd ~/Friend/.claude && cat > settings.json"}, True),
-        ("Bash", {"command": "zsh -c 'cp x ~/Friend/.claude/settings.json'"}, True),
+        ("Bash", {"command": "cd ~/Friend/.claude && cat > settings.json"}, False),
+        ("Bash", {"command": "zsh -c 'cp x ~/Friend/.claude/settings.json'"}, False),
+        # Text a command only carries is not code: quoted data and heredoc bodies.
+        ("Bash", {"command": "printf '%s\\n' 'Deny on kill -STOP 4242' >> ~/Hst/CGC.txt"}, False),
+        ("Bash", {"command": 'echo "test: kill -CONT 4242" >> notes/x.md'}, False),
+        ("Bash", {"command": "cat >> notes/x.md <<'EOF'\nkill -STOP 4242\nEOF"}, False),
+        ("Bash", {"command": "cat >> notes/x.md <<'EOF'\nkill -STOP 1\nEOF\nkill -CONT 2"}, True),
+        # …but a script, a command substitution or a heredoc fed to a shell is code.
+        ("Bash", {"command": 'echo "$(kill -CONT 4242)"'}, True),
+        ("Bash", {"command": "cat <<EOF\n$(kill -CONT 4242)\nEOF"}, True),
+        ("Bash", {"command": "bash <<'EOF'\nkill -CONT 4242\nEOF"}, True),
+        ("Bash", {"command": "python3 - <<'PY'\nimport os\nos.kill(4242, 18)\nPY"}, True),
         ("Bash", {"command": "skill -CONT 1"}, False),
         ("Bash", {"command": "grep SIGSTOP notes/x.md"}, False),
         ("Write", {"file_path": "CLAUDE.md", "content": ""}, True),
