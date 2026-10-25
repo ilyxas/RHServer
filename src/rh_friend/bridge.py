@@ -7,6 +7,11 @@ For each new envelope in inbox_dir it presses Escape (the owner's message interr
 and presses Enter. It never reads the message: the
 agent-side verifier loads and checks the envelope itself. Delivered ids are kept in
 [bridge] state_file, so a restart does not type them again.
+
+While the gate waits for the owner's answer (`.gate-wait` in the inbox, fresher than
+GATE_WAIT_MAX_S), a friend.decide envelope is not typed: the gate reads it, and the
+Escape before a typed line would cancel the very call the gate holds. The bridge only
+reads the envelope's op for this, unverified; trust stays with the gate and the verifier.
 """
 
 from __future__ import annotations
@@ -20,7 +25,8 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from rh_common.friend import pointer
+from rh_common.friend import OP_DECIDE, parse_envelope, pointer
+from rh_common.protocol import ProtocolError, parse_auth
 from rh_friend import config as friend_config
 from rh_friend.config import BridgeConfig
 
@@ -39,6 +45,26 @@ def pending(inbox: Path, delivered: set[str]) -> list[str]:
         return []
     files.sort(key=lambda p: (p.stat().st_mtime, p.name))
     return [p.stem for p in files if p.stem not in delivered]
+
+
+GATE_WAIT_MARK = ".gate-wait"  # rh_friend.gate.WAIT_MARK
+GATE_WAIT_MAX_S = 660  # longer than the gate hook's timeout: an older mark is left over
+
+
+def gate_waiting(inbox: Path, now: float | None = None) -> bool:
+    try:
+        age = (time.time() if now is None else now) - (inbox / GATE_WAIT_MARK).stat().st_mtime
+    except OSError:
+        return False
+    return age <= GATE_WAIT_MAX_S
+
+
+def is_decision(inbox: Path, sid: str) -> bool:
+    try:
+        obj, _ = parse_auth(parse_envelope((inbox / f"{sid}.json").read_bytes()).auth)
+    except (OSError, ValueError, ProtocolError):
+        return False
+    return obj.op == OP_DECIDE
 
 
 ESCAPE_PAUSE_S = 0.3  # Claude Code needs a moment to stop the turn before the next line
@@ -89,10 +115,13 @@ def step(
             pointer(sid)
         except ValueError:
             continue  # not an envelope name; the core never writes one
-        type_pointer(bridge, sid, run, sleep)
+        held = gate_waiting(inbox) and is_decision(inbox, sid)  # the gate reads this one
+        if not held:
+            type_pointer(bridge, sid, run, sleep)
         delivered.add(sid)
         _save_state(bridge.state_file, delivered)
-        typed.append(sid)
+        if not held:
+            typed.append(sid)
     return typed
 
 

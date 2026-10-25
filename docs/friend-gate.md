@@ -12,6 +12,24 @@ question/task mode and no longer reads `rh_current.json` to classify tool calls.
 An explicitly installed gate applies `[[gate.protected]]`, verifies a fresh critical-key
 Allow for the exact canonical tool call, and spends it once via the core. The newest
 valid decision takes precedence; the core enforces freshness, matching and single use.
+
+The gate asks by itself. When a protected call has no usable Allow (none yet, expired,
+already used or voided), the hook records the question in the core (`Gate: <rule>
+(<tool>: <description>)` above the exact call), waits up to `[gate] wait_s` (default
+580 s) for the phone's answer and then lets the call through once or blocks it. No
+answer in time: the question is withdrawn and the call is blocked. A Deny signed within
+`decide_window_s` blocks a repeat of the same call at once, without asking again. While
+the hook waits it leaves `.gate-wait` in the inbox, and the bridge does not type the
+answer into the session: the Escape before a typed line would cancel the very call the
+hook holds. `wait_s = 0` turns asking off; `rh-friend-ask` still asks ahead of a call.
+
+The default rules protect pausing or resuming a process (`kill -STOP/-CONT`, `os.kill`)
+and Write/Edit of settings and rules files by `file_path`. Rules for the shell's
+`command` with `code_only = true` look at the shell code only: quoted text and heredoc
+bodies are data and are skipped, except a `-c`/`-e` script, a command substitution in
+`"…"` or an unquoted heredoc, and a heredoc fed to an interpreter. Two rules were removed
+on 2026-10-26 because they fired on mentions rather than actions: records in CGC, and the
+shell naming a settings file next to `>`, `python3`, `cp`… anywhere in the command.
 Legacy gate configuration is still accepted; channel switching preserves explicitly
 configured rules. A newly generated channel config creates no gate or protected rules.
 
@@ -24,7 +42,8 @@ can match a protected spelling. They do not provide OS isolation. See the histor
 hook failure discussion in [decision 004](decisions/004-pretooluse-onfailure.md).
 
 For a deliberate legacy installation, `[gate]` still accepts `admin_socket`,
-`decide_window_s`, `ask`, `log`, `report_timeout_s` and `[[gate.protected]]` tables.
+`decide_window_s`, `wait_s`, `ask`, `log`, `report_timeout_s` and `[[gate.protected]]`
+tables.
 Old `question_tools`, `question_bash` and `question_ttl_s` are ignored. Receipt/reply
 transport should use the top-level `admin_socket`; `[gate].admin_socket` is a fallback
 for old configs only.
@@ -66,27 +85,22 @@ installed CLI meets it before enabling the gate.
        "PreToolUse": [{"hooks": [{
          "type": "command",
          "command": "\"/fixed/install/bin/rh-friend-gate\" --config \"/absolute/agent.toml\" --project \"/absolute/project\"",
-         "timeout": 30,
+         "timeout": 600,
          "onFailure": "block"
        }]}]
      }
    }
    ```
 
-3. Restart the agent session. In that session, call Bash with command
-   `printf RH_GATE_TEST` and description `gate acceptance probe`: without a decision it
-   must be blocked. Ask using the configured executable:
+   `timeout` must be longer than `[gate] wait_s` (580 s by default), or the host ends the
+   wait first and `onFailure` blocks the call before the owner's answer arrives.
 
-   ```sh
-   /fixed/install/bin/rh-friend-ask --config /absolute/agent.toml \
-     --question "Allow the harmless gate probe once?" \
-     --bash "printf RH_GATE_TEST" --description "gate acceptance probe"
-   ```
-
-   Allow on the phone, then retry exactly the same tool input, including description
-   and any other fields: it must pass once, and the next attempt must be refused.
-   Ask again and Deny: it must block. Ask again and Allow, wait over 120 seconds:
-   it must block. Check the rejection log and core decision-use events.
+3. In the agent session (a running session picks up hook changes), call Bash with command
+   `printf RH_GATE_TEST` and description `gate acceptance probe`: the phone shows the
+   question `Gate: gate acceptance probe (Bash: gate acceptance probe)`. Allow: the call
+   runs. Call it again: a new question; Deny: it is blocked, and an immediate repeat is
+   blocked without a question. Call it again later and do not answer: blocked after
+   `wait_s`, the question withdrawn. Check the rejection log and core decision-use events.
 4. In a disposable test session, temporarily point the hook command to a missing
    executable and confirm the probe is blocked by hook failure. Restore the path
    and restart that session. This verifies the installed host's failure handling.
@@ -100,9 +114,9 @@ and replies still work without the gate. No service, database or pairing reset i
 
 ## Known limitations
 
-Regexes are a seat belt, not a sandbox. They classify spelling, not effects: reading a
-settings file through Python can be blocked; executing a script can hide a protected
-action. Tool parameters must match the signed action exactly. A decision label alone
+Regexes are a seat belt, not a sandbox. They classify spelling, not effects: executing a
+script can hide a protected action, and `code_only` is a rough reading of the shell, not
+a parser. Tool parameters must match the signed action exactly. A decision label alone
 never authorizes a different call.
 
 The gate covers calls observed by this Claude Code hook, not every process or external
