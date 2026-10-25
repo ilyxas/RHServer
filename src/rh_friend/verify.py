@@ -14,8 +14,8 @@
   not matter: only this hook's own context carries a verdict, and every input gets one.
 - Outside the configured project the hook does nothing.
 - A verified friend.send also leaves a note of the message the session is now on
-  (`state/rh_current.json`: id, kind, prompt_id) for the gate (question or task mode) and
-  the Stop hook (which message the reply answers), and tells the core the message was
+  (`state/rh_current.json`: id, prompt_id, at) only for the Stop hook to correlate
+  the reply with the message, and tells the core the message was
   received (`friend.received`) or, when blocked, rejected (`friend.rejected`). Those
   reports are best-effort facts: a core that does not answer changes no verdict.
 - With `require_protected = true` (managed install) a pointer is accepted only when
@@ -272,7 +272,7 @@ def handle(
     assert verified.message is not None
     message = verified.message
     prompt_id = event.get("prompt_id") if isinstance(event.get("prompt_id"), str) else None
-    try:  # the note is for the gate and the Stop hook; its loss must not block the message
+    try:  # reply correlation only; its loss must not block the message
         write_current(cfg, id=sid, prompt_id=prompt_id, at=at)
     except Exception as e:
         print(f"rh-friend-verify: cannot write {cfg.current_file}: {e}", file=sys.stderr)

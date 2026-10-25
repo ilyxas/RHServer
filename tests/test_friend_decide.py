@@ -1076,7 +1076,6 @@ def test_rhcore_friend_config_needs_no_gate(short_dir: Path, tmp_path: Path) -> 
     cfg = from_dict(tomllib.loads(out.getvalue()))
     assert cfg.gate is None
     assert cfg.admin_socket == core.config.admin_socket
-    assert "question_bash" not in out.getvalue()
     assert "[gate]" not in out.getvalue()
 
 
