@@ -200,7 +200,6 @@ def test_end_to_end_over_the_admin_socket(env: Any, tmp_path: Path) -> None:
                 f'inbox_dir = "{cfg.inbox_dir}"',
                 f'devices_file = "{cfg.devices_file}"',
                 f'core_key = "{b64e(public_x963(core.key))}"',
-                "[gate]",
                 f'admin_socket = "{core.config.admin_socket}"',
             ]
         )
@@ -251,3 +250,66 @@ def test_end_to_end_over_the_admin_socket(env: Any, tmp_path: Path) -> None:
     admin.send({"cmd": "friend.reply", "in_reply_to": sid, "text": "again"})
     assert admin.recv()["error"] == "closed"
     admin.close()
+
+
+def test_late_stop_does_not_answer_a_newer_message(tmp_path: Path) -> None:
+    cfg = plain_cfg(tmp_path)
+    write_current(cfg, id="b" * 32, prompt_id="new-prompt", at=NOW)
+    sent: list[dict[str, Any]] = []
+    out = reply.handle_stop(
+        {"last_assistant_message": "old answer", "prompt_id": "old-prompt"},
+        cfg,
+        report=lambda m: sent.append(m) or {"ok": True},
+    )
+    assert out == {"ok": False, "error": "prompt_mismatch"}
+    assert sent == [] and read_current(cfg)["id"] == "b" * 32
+
+
+def test_local_input_detaches_reply_without_granting_a_mode(tmp_path: Path) -> None:
+    from rh_friend.verify import handle
+
+    cfg = plain_cfg(tmp_path)
+    write_current(cfg, id="a" * 32, kind="question", prompt_id="phone-prompt", at=NOW)
+    out = handle(
+        {"prompt": "Thanks, change nothing", "prompt_id": "local-prompt"},
+        cfg,
+        project_dir=str(cfg.project_dir),
+        report=lambda m: {"ok": True},
+    )
+    assert out["hookSpecificOutput"]["additionalContext"] == "[unsigned]"
+    assert read_current(cfg) is None
+    sent: list[dict[str, Any]] = []
+    assert (
+        reply.handle_stop(
+            {"last_assistant_message": "local answer"},
+            cfg,
+            report=lambda m: sent.append(m) or {"ok": True},
+        )
+        is None
+    )
+    assert sent == []
+
+
+def test_receipts_and_replies_work_with_generated_config_without_gate(
+    env: Any, tmp_path: Path
+) -> None:
+    import tomllib
+
+    from rh_cli.channel import agent_config_text
+    from rh_friend.verify import handle
+
+    core, client, _, _ = env
+    phone = Phone()
+    pair(core, client, phone)
+    cfg = from_dict(
+        tomllib.loads(agent_config_text(core.config, tmux="tmux", ask=tmp_path / "ask"))
+    )
+    assert cfg.gate is None
+    sent = signed(client, phone, "POST", "/v1/friend", OP_SEND, "normal", body("Hello"))
+    sid = sent.json()["id"]
+    out = handle({"prompt": f"⟦rh:{sid}⟧", "prompt_id": "p"}, cfg, project_dir=str(cfg.project_dir))
+    assert out and out["hookSpecificOutput"]["additionalContext"].endswith("\nHello")
+    assert core.store.message(sid).state == "received"
+    assert reply.handle_stop({"last_assistant_message": "Hi", "prompt_id": "p"}, cfg)["ok"]
+    row = core.store.message(sid)
+    assert row.state == "answered" and row.replies[-1].text == "Hi"

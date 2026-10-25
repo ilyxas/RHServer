@@ -7,8 +7,8 @@
 Claude Code runs the Stop hook when the agent has finished responding (not when the turn
 was interrupted) and hands it `last_assistant_message`. If the verifier noted an owner's
 message the session is on (`state/rh_current.json`), that text is sent to the core as
-`friend.reply` for it; the core marks the message answered, or waiting when the agent
-asked the owner a decision since. A turn the owner did not cause (no open message)
+`friend.reply` for it; the core records that a reply arrived, not that a task finished.
+A turn the owner did not cause (no open message)
 sends nothing. A core that does not answer gets the reply later: it is kept in
 `state/rh_pending.jsonl` and sent by the next hook call or `--flush`.
 
@@ -45,6 +45,9 @@ def reply(
     current = read_current(cfg)
     if current is None:
         return None
+    expected = current.get("prompt_id")
+    if prompt_id is not None and expected is not None and prompt_id != expected:
+        return {"ok": False, "error": "prompt_mismatch"}
     text = text.strip()
     if not text:
         return None

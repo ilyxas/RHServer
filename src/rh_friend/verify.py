@@ -229,10 +229,12 @@ def handle(
     match = POINTER_RE.match(prompt.strip())
     settle_pending(cfg)  # a reply the Stop hook could not deliver
     if match is None:
-        # The owner (or whoever holds the keyboard) typed into the session: a question from
-        # the phone no longer shapes what the session may do. The message stays open, so
-        # the Stop hook still answers it; only the mode is lifted.
-        lift_question_mode(cfg)
+        # Local input starts its own turn. Do not attach its answer to an older phone
+        # message, or interpret the text as a change in permissions.
+        current = read_current(cfg)
+        if current is not None:
+            with contextlib.suppress(OSError):
+                close_current(cfg, str(current["id"]))
         return _context(UNSIGNED_LABEL)
     sid = match.group(1)
     at = now()
@@ -271,7 +273,7 @@ def handle(
     message = verified.message
     prompt_id = event.get("prompt_id") if isinstance(event.get("prompt_id"), str) else None
     try:  # the note is for the gate and the Stop hook; its loss must not block the message
-        write_current(cfg, id=sid, kind=message.kind, prompt_id=prompt_id, at=at)
+        write_current(cfg, id=sid, prompt_id=prompt_id, at=at)
     except Exception as e:
         print(f"rh-friend-verify: cannot write {cfg.current_file}: {e}", file=sys.stderr)
         with contextlib.suppress(OSError):
@@ -280,17 +282,8 @@ def handle(
                 {"at": _ts(at), "id": sid, "code": "note_not_written", "detail": str(e)},
             )
     with contextlib.suppress(Exception):
-        report({"cmd": "friend.received", "id": sid, "prompt_id": prompt_id, "kind": message.kind})
-    label = label[:-1] + f" · {message.kind}]"
-    hint = QUESTION_HINT if message.kind == "question" else TASK_HINT
-    return _context(f"{label}\n{hint}\n{message.text}")
-
-
-QUESTION_HINT = (
-    "(a question: answer in text; read-only tools run freely, anything else goes through "
-    "rh-friend-ask or becomes a task when the owner says so)"
-)
-TASK_HINT = "(a task: work on it; protected actions still need a decision)"
+        report({"cmd": "friend.received", "id": sid, "prompt_id": prompt_id})
+    return _context(f"{label}\n{message.text}")
 
 
 def _reporter(cfg: FriendConfig) -> Report:
@@ -301,14 +294,14 @@ def _reporter(cfg: FriendConfig) -> Report:
 
 
 def write_current(
-    cfg: FriendConfig, *, id: str, kind: str, prompt_id: str | None, at: datetime
+    cfg: FriendConfig, *, id: str, prompt_id: str | None, at: datetime, kind: str | None = None
 ) -> None:
-    """Note the owner's message the session is now on, atomically."""
-    _write_note(cfg, {"open": {"id": id, "kind": kind, "prompt_id": prompt_id, "at": _ts(at)}})
+    """Track a reply only. Legacy `kind` is ignored; it cannot change permissions."""
+    _write_note(cfg, {"open": {"id": id, "prompt_id": prompt_id, "at": _ts(at)}})
 
 
 def read_current(cfg: FriendConfig) -> dict[str, Any] | None:
-    """The open message {id, kind, prompt_id, at}, or None (no note, closed, unreadable)."""
+    """The reply target {id, prompt_id, at}, or None (no note, closed, unreadable)."""
     try:
         doc = json.loads(cfg.current_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -319,15 +312,6 @@ def read_current(cfg: FriendConfig) -> dict[str, Any] | None:
     if not isinstance(open_, dict) or not isinstance(open_.get("id"), str):
         return None
     return open_
-
-
-def lift_question_mode(cfg: FriendConfig) -> None:
-    """Keep the open message, drop its question mode (the owner is at the keyboard)."""
-    current = read_current(cfg)
-    if current is None or current.get("kind") != "question":
-        return
-    with contextlib.suppress(Exception):
-        _write_note(cfg, {"open": {**current, "kind": "task", "lifted_at": _ts(_now())}})
 
 
 def settle_pending(cfg: FriendConfig) -> None:

@@ -50,9 +50,8 @@ def agent_config_text(
 ) -> str:
     """The agent-side config for the core's [channel], with the core key pinned.
 
-    `rules_text`: the `[[gate.protected]]` tables to keep as they are (the owner's edits
-    survive a switch); None writes the default rules with `owner_names`."""
-    from rh_friend.config import DEFAULT_QUESTION_BASH, DEFAULT_QUESTION_TOOLS, default_protected
+    `rules_text`: optional existing legacy gate rules to preserve on a switch.
+    None generates only the message channel. `owner_names` is a legacy CLI argument."""
 
     ch = cfg.ch
     if not cfg.key_path.exists():
@@ -70,46 +69,27 @@ def agent_config_text(
         f"core_key = {q(b64e(core_pub))}",
         "window_s = 900",
         'owner_label = "owner"',
+        f"admin_socket = {q(cfg.admin_socket)}",
+        "report_timeout_s = 2",
         "",
         "[bridge]",
         f"tmux = {q(tmux)}",
         f"target = {q(ch.target)}",
         "interrupt = true   # one Escape before each message: the owner's message interrupts",
         "",
-        "# PreToolUse gate (rh-friend-gate): a protected call needs a fresh allow decision",
-        "# from the phone for exactly that call. Any matching rule protects the call.",
-        "[gate]",
-        f"admin_socket = {q(cfg.admin_socket)}",
-        f"decide_window_s = {cfg.decide_window_s}",
-        f"ask = {q(ask)}",
-        "# Question mode (the owner's message is a question, not a task): these tools and",
-        "# read-only shell commands run freely; anything else needs a decision or a task.",
-        "question_tools = [" + ", ".join(q(t) for t in DEFAULT_QUESTION_TOOLS) + "]",
-        "question_bash = [",
-        *[f"  {q(b)}," for b in DEFAULT_QUESTION_BASH],
-        "]",
     ]
-    text = "\n".join(lines) + "\n"
+    # Old explicitly configured protected rules survive a channel switch, but the
+    # standard channel neither creates them nor installs a PreToolUse hook.
     if rules_text is not None:
-        return text + "\n" + rules_text.strip("\n") + "\n"
-    for rule in default_protected(owner_names):
-        lines += ["", "[[gate.protected]]", f"name = {q(rule['name'])}"]
-        lines.append(f"tools = [{', '.join(q(t) for t in rule['tools'])}]")
-        if rule.get("field"):
-            lines.append(f"field = {q(rule['field'])}")
-        lines.append("match = [")
-        lines += [f"  {_toml_literal(m)}," for m in rule["match"]]
-        lines.append("]")
-        if rule.get("ignore_case"):
-            lines.append("ignore_case = true")
+        lines += [
+            "# Optional legacy gate; not part of the message channel.",
+            "[gate]",
+            f"admin_socket = {q(cfg.admin_socket)}",
+            f"decide_window_s = {cfg.decide_window_s}",
+            f"ask = {q(ask)}",
+            rules_text.strip(),
+        ]
     return "\n".join(lines) + "\n"
-
-
-def _toml_literal(regex: str) -> str:
-    """A regex as a TOML literal string (no escaping) when it has no single quote."""
-    if "'" not in regex and "\n" not in regex:
-        return f"'{regex}'"
-    return json.dumps(regex, ensure_ascii=False)
 
 
 def rules_of(text: str) -> str | None:
@@ -332,9 +312,14 @@ def channel_set(
     print(f"channel: {previous or '—'} → {req.agent} (core reports {seen})", file=out)
     print("Still yours to do:", file=out)
     print(
-        f"  - hooks rh-friend-verify (UserPromptSubmit), rh-friend-gate (PreToolUse) and "
-        f"rh-friend-reply (Stop) in {project}/.claude/settings.json "
+        f"  - hooks rh-friend-verify (UserPromptSubmit) and rh-friend-reply (Stop) "
+        f"in {project}/.claude/settings.json "
         f"(--config {req.agent_config} --project {project})",
+        file=out,
+    )
+    print(
+        "  - remove only RH rh-friend-gate PreToolUse entries from project/global settings; "
+        "leave unrelated hooks and permissions unchanged",
         file=out,
     )
     if previous and previous != req.agent:

@@ -381,8 +381,8 @@ class Core:
     ) -> MessageRow:
         """A new message from the owner: stored with its text, journaled as chat (the hash
         of the text, not the text: the journal is a chain and cannot forget, the store can),
-        and every message the agent still owed an answer to is superseded by it (the bridge
-        interrupts the agent, so the previous turn ends without a reply)."""
+        without cancelling any previous message or task. Terminal interruption belongs
+        to the bridge; accepting a message does not prove that a turn was interrupted."""
         row = self.store.add_message(
             id=sid,
             message_id=message.id,
@@ -404,8 +404,6 @@ class Core:
             re=message.re,
             text_sha256=sha256_hex(message.text.encode("utf-8")),
         )
-        for previous in self.store.supersede_open(by=sid, now=now):
-            self.journal.append("friend.message.superseded", agent=self.agent, id=previous, by=sid)
         return row
 
     def message_received(self, message_id: str, *, prompt_id: str | None) -> dict[str, Any]:
@@ -450,8 +448,8 @@ class Core:
         self, message_id: str, *, text: str, prompt_id: str | None, progress: bool
     ) -> dict[str, Any]:
         """The agent's reply to a message. The final reply of a turn (`progress` false)
-        answers the message, unless the agent asked the owner a question since the message
-        arrived: then the message waits for the decision and the reply is kept as progress.
+        records an answer, not task completion. Approval questions do not determine
+        message state; they are a separate, optional mechanism.
         With `[channel] match_prompt_id`, the reply must name the prompt the verifier
         recorded for the message."""
         if not isinstance(text, str) or not text.strip():
@@ -476,12 +474,8 @@ class Core:
             )
             return _refused("prompt_mismatch", "the reply names another prompt than the message")
         now = self.clock()
-        since = row.received_at or row.accepted_at
-        waiting = any(q.asked_at >= since for q in self.store.open_questions())
         if progress:
             kind, state, event = "progress", None, "friend.message.progress"
-        elif waiting:
-            kind, state, event = "progress", "waiting", "friend.message.waiting"
         else:
             kind, state, event = "final", "answered", "friend.message.answered"
         updated = self.store.add_reply(message_id, kind=kind, text=text, now=now, state=state)

@@ -55,11 +55,15 @@ def call(socket_path: Path, msg: dict[str, Any], *, timeout: float = SOCKET_TIME
 
 def report(cfg: FriendConfig, msg: dict[str, Any]) -> dict[str, Any] | None:
     """Tell the core a fact; the answer, or None when the core could not be reached or the
-    config has no [gate] (and so no admin socket). Never raises."""
-    if cfg.gate is None:
+    config has no reporting socket. Legacy [gate] is a fallback only. Never raises."""
+    socket_path = cfg.admin_socket
+    timeout = cfg.report_timeout_s
+    if socket_path is None and cfg.gate is not None:
+        socket_path, timeout = cfg.gate.admin_socket, cfg.gate.report_timeout_s
+    if socket_path is None:
         return None
     try:
-        out: dict[str, Any] = call(cfg.gate.admin_socket, msg, timeout=cfg.gate.report_timeout_s)
+        out: dict[str, Any] = call(socket_path, msg, timeout=timeout)
     except CoreUnreachable:
         return None
     return out
